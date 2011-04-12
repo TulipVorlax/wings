@@ -53,6 +53,7 @@ ERL_COMPILE_FLAGS += -pa $(WINGS_EBIN) -pa $(WINGS_INTL) -I $(WINGS_SRC) -I $(WI
 # ----------------------------------------------------
 
 opt debug:
+	mkdir -p $(EBIN)
 	$(MAKE) TYPE=$@ common
 
 common: $(TARGET_FILES) subdirs

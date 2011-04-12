@@ -9,13 +9,19 @@
 -module(pbr_scene).
 
 -include("pbr.hrl").
--include("wings.hrl").
+-include_lib("wings/src/wings.hrl").
 
 -export([init/3,
 	 intersect/2,
 	 get_lights/1,
 	 get_infinite_light/1,
 	 get_face_info/6,
+	 vertices/1,
+	 triangles/1,
+	 normals/1,
+	 uvs/1,
+	 vertex_colors/1,
+	 mesh2mat/1,
 	 bb/1]).
 
 -export([coord_sys/1]).
@@ -23,9 +29,11 @@
 -record(scene, 
 	{info,
 	 isect,
-	 get_mat,
 	 lights,
-	 world_bb
+	 world_bb,
+	 no_fs,
+	 data,
+	 fsmap
 	}).
 
 -record(face, {vs,				% Vertices
@@ -36,7 +44,7 @@
 	      }).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-init(St = #st{shapes=Shapes,mat=Mtab0}, Opts, R = #renderer{cl=CL}) ->
+init(St = #st{shapes=Shapes,mat=Mtab0}, Opts, R = #renderer{cl=CL0}) ->
     Lights0 = proplists:get_value(lights, Opts),
     Lights  = pbr_light:create_lookup(Lights0),
     Mtab    = pbr_mat:init(Mtab0),
@@ -72,8 +80,61 @@ init(St = #st{shapes=Shapes,mat=Mtab0}, Opts, R = #renderer{cl=CL}) ->
 	      end,
     AccelBin = {WBB,_,_,_} = ?TC(e3d_qbvh:init([{Size,GetTri}])),
 
-    Scene = #scene{info=GetFace, lights=pbr_light:init(Lights, WBB), world_bb=WBB},
-    R#renderer{scene=init_accel(CL, AccelBin, Scene)}.
+    Scene = #scene{info=GetFace, lights=pbr_light:init(Lights, WBB), 
+		   world_bb=WBB, data=Data, no_fs=Size, fsmap=F2M},
+    {CL, Scene} = init_accel(CL0, AccelBin, Scene),
+    R#renderer{cl=CL, scene=Scene}.
+
+vertices(#renderer{scene=#scene{data=Data}}) ->
+    << <<V1x:?F32, V1y:?F32, V1z:?F32>> || 
+	<<V1x:?F32, V1y:?F32, V1z:?F32,
+	  _N1x:?F32, _N1y:?F32, _N1z:?F32,
+	  _U1:?F32, _V1:?F32 >> <= Data >>.
+
+triangles(#renderer{scene=#scene{no_fs=Size}}) ->
+    triangles_1(<<>>, 0, Size*3).
+triangles_1(Bin, Id, Size) when Id < Size ->
+    triangles_1(<<Bin/binary, Id:?UI32>>, Id+1, Size);
+triangles_1(Bin,_,_) -> Bin.
+
+normals(#renderer{scene=#scene{data=Data}}) ->
+    << <<N1x:?F32, N1y:?F32, N1z:?F32>> || 
+	<<_V1x:?F32, _V1y:?F32, _V1z:?F32,
+	  N1x:?F32, N1y:?F32, N1z:?F32,
+	  _U1:?F32, _V1:?F32 >> <= Data >>.
+
+uvs(#renderer{scene=#scene{data=Data}}) ->
+    << <<U1:?F32, V1:?F32>> || 
+	<<_V1x:?F32, _V1y:?F32, _V1z:?F32,
+	  _N1x:?F32, _N1y:?F32, _N1z:?F32,
+	  U1:?F32, V1:?F32 >> <= Data >>.
+
+vertex_colors(#renderer{scene=#scene{data=Data}}) ->
+    << <<1.0:?F32, 1.0:?F32, 1.0:?F32>> || 
+	<<_V1x:?F32, _V1y:?F32, _V1z:?F32,
+	  _N1x:?F32, _N1y:?F32, _N1z:?F32,
+	  U1:?F32, V1:?F32 >> <= Data >>.
+
+%% Returns used {<<Face2MeshId:?UI32>>, <<MeshId2MatId:?UI32>>, [Mats]}
+mesh2mat(#renderer{scene=#scene{fsmap=FsMap}}) ->
+    Collect = fun(_Id,Mat,{MId,Mat,Mats,Bin}) ->
+		      {MId,Mat,Mats,<<Bin/binary,MId:?UI32>>};
+		 (_Id,NewMat,{MId,_Mat,Mats,Bin}) ->
+		      {MId+1,NewMat,[NewMat|Mats],<<Bin/binary,(MId+1):?UI32>>}
+	      end,
+    {_MId,_Mat,Mats0,Face2Mesh} = array:foldl(Collect, {-1, undefined, [], <<>>}, FsMap),
+    Mats = lists:reverse(Mats0),
+    MatOrder = fun(Mat, Acc={Id, MatsT, MatsL}) ->
+		       case gb_trees:is_defined(Mat,MatsT) of
+			   true -> Acc;
+			   false -> {Id+1, 
+				     gb_trees:insert(Mat, Id, MatsT), 
+				     [Mat|MatsL]}
+		       end
+	       end,
+    {_, MatsT, OrderdMats} = lists:foldl(MatOrder, {0, gb_trees:empty(), []}, Mats),
+    Mesh2Mat = << <<(gb_trees:get(MatId, MatsT)):?UI32>> || MatId <- Mats >>,
+    {Face2Mesh, Mesh2Mat, lists:reverse(OrderdMats)}.
 
 %% Returns world bounding box
 bb(#renderer{scene=#scene{world_bb=WBB}}) ->
@@ -118,11 +179,12 @@ get_face_info(#ray{o=RayO,d=RayD},T,B1,B2,FId,
     end.
 
 intersect({NoRays, RaysBin}, #renderer{scene=Scene, cl=CL}) ->
-    {Kernel, Qn, Qt, Rays, Hits, WGSz} = Scene#scene.isect,
-    Wait = pbr_cl:write(CL, Rays, NoRays*?RAY_SZ, RaysBin),
+    {Qn, Qt, Rays, Hits, WGSz} = Scene#scene.isect,
+    Wait = wings_cl:write(Rays, RaysBin, CL),
     HitSz = NoRays * ?RAYHIT_SZ,
     Args = [Rays,Hits,Qn,Qt, NoRays, {local,24*WGSz*4}],
-    Running = pbr_cl:run(CL, ?MAX_RAYS, WGSz, Kernel, Args, {Hits, HitSz}, [Wait]),
+    Run = wings_cl:cast('Intersect', Args, ?MAX_RAYS, [Wait], CL),
+    Running = wings_cl:read(Hits, HitSz, [Run], CL),
     {ok, <<Result:HitSz/binary, _/binary>>} = cl:wait(Running, 1000),
     {Rays, Result}.
 
@@ -168,7 +230,7 @@ fix_matmap([_MI={Name, _, _Start, Count}|Mats], false, Mtab, Acc0) ->
     Acc = append_color(Count div 3, Mat, Acc0),
     fix_matmap(Mats, false, Mtab, Acc);
 fix_matmap([_MI={_, _, _Start, Count}|Mats], LightId, Mtab, Acc0) ->
-    Acc  = append_color(Count div 3, LightId, Acc0),
+    Acc = append_color(Count div 3, LightId, Acc0),
     fix_matmap(Mats, LightId, Mtab, Acc);
 fix_matmap([], _, _, Acc) -> Acc.
 
@@ -176,21 +238,20 @@ append_color(N, Diff, Acc) when N > 0 ->
     append_color(N-1, Diff, [Diff|Acc]);
 append_color(_, _, Acc) -> Acc.
 
-init_accel(CL, {_BB, Qnodes, Qtris, _Map}, Scene) ->
-    Kernel  = pbr_cl:compile(CL, "qbvh_kernel.cl"),
-    Context = pbr_cl:get_context(CL),
-    Device  = pbr_cl:get_device(CL),
+init_accel(CL0, {_BB, Qnodes, Qtris, _Map}, Scene) ->
+    CL = wings_cl:compile("qbvh_kernel.cl", CL0),
+    Context = wings_cl:get_context(CL),
     Copy = [read_only, copy_host_ptr],
     {ok,QN} = cl:create_buffer(Context, Copy, byte_size(Qnodes), Qnodes),
     {ok,QT} = cl:create_buffer(Context, Copy, byte_size(Qtris), Qtris),
     {ok,Rays} = cl:create_buffer(Context, [read_write],  ?RAYBUFFER_SZ),
     {ok,Hits} = cl:create_buffer(Context, [write_only], ?RAYHIT_SZ*?MAX_RAYS),
-    {ok,Local} = cl:get_kernel_workgroup_info(Kernel, Device, work_group_size),
-    {ok,Mem} = cl:get_kernel_workgroup_info(Kernel, Device, local_mem_size),
+    %%Device  = wings_cl:get_device(CL),
+    %% {ok,Local} = cl:get_kernel_workgroup_info(Kernel, Device, work_group_size),
+    %% {ok,Mem} = cl:get_kernel_workgroup_info(Kernel, Device, local_mem_size),
+    %% io:format("Scene: WG ~p LMem ~p~n",[Local,Mem]),
     
-    io:format("Scene: WG ~p LMem ~p~n",[Local,Mem]),
-    
-    Scene#scene{isect={Kernel, QN, QT, Rays, Hits, 64}}.
+    {CL, Scene#scene{isect={QN, QT, Rays, Hits, 64}}}.
 
 i_col(B0,B1,B2, {{V1x,V1y,V1z}, {V2x,V2y,V2z}, {V3x,V3y,V3z}}) 
   when is_float(B0), is_float(B1), is_float(B2),

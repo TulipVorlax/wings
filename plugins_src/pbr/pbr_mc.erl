@@ -14,6 +14,8 @@
 	 sample_cone/3, cone_pdf/1	 
 	]).
 
+-export([spherical_phi/1, spherical_theta/1]).
+
 -include("pbr.hrl").
 
 %%% Uniform 3D sampling %%%
@@ -58,3 +60,18 @@ sample_triangle(U1,U2) ->
     {1.0 - Su1, U2 * Su1}.
     
 
+%%% 
+
+spherical_phi({X,Y,_Z}) ->
+    positive(math:atan(Y,X)).
+
+spherical_theta({_, _, Z}) ->
+    math:acos(clamp(Z, -1.0, 1.0)).
+
+positive(P) when P < 0.0 -> 
+    P + 2.0 * ?PI;
+positive(P) -> P.
+    
+clamp(V, Min, _Max) when V < Min -> Min;
+clamp(V, _Min, Max) when V > Max -> Max;
+clamp(V, _Min, _Max) -> V.

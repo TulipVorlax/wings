@@ -38,4 +38,4 @@
 	 f=?RAY_INFINITY}).			% Far  = maxt
 
 %%-define(F32, 32/float-native).    % Defined in wings.hrl
--define(I32, 32/native).
+%%-define(I32, 32/native).
