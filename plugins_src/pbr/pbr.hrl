@@ -14,6 +14,10 @@
 	  film
 	}).
 
+-define(IS_POINT_LIGHT(We), (We#we.light =/= none 
+			     andalso ((element(2, We#we.light) == point) orelse 
+			              (element(2, We#we.light) == spot)))).
+
 -define(PI, 3.141592653589793).
 -define(INV_PI, 1/3.141592653589793).
 

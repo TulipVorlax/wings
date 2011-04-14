@@ -125,7 +125,7 @@ to_rgb(Spectrum) ->
 
 %% Material functions
 init(Mtab) ->
-    Converted = [{Id, create_mat(WMat)} || 
+    Converted = [{Id, (create_mat(WMat))#material{label=Id}} || 
 		    {Id,WMat} <- gb_trees:to_list(Mtab)],
     gb_trees:from_orddict(Converted).
 
@@ -140,8 +140,8 @@ create_mat(WM) ->
 
 create_solid_mat(Diff, OpenGL, Maps) ->
     Shine    = proplists:get_value(shininess, OpenGL),
-    Specular = proplists:get_value(specular, OpenGL),
-    
+    {R,G,B,_} = proplists:get_value(specular, OpenGL),
+    Specular = {R,G,B},
     case Shine of
 	1.0 -> create_mirror(Diff, Specular, Maps);
 	_ -> create_solid_mat(Diff, Specular, Shine, Maps)
@@ -184,15 +184,17 @@ create_diffuse(Diff, Maps) ->
     #material{m_info=#matte{kd=Diff, kdOverPi=smul(Diff, ?INV_PI)}, maps=Maps}.
 
 create_glass_mat(A, Diff, OpenGL, Maps) ->
-    Spec  = proplists:get_value(specular, OpenGL),
-    #material{m_info=#glass{refl=Diff, refr=Spec, 
-			    ior=2.0*A, oior=1.0-A}, maps=Maps}.
+    {R,G,B,_} = proplists:get_value(specular, OpenGL),
+    #material{m_info=#glass{refl=Diff, refr={R,G,B}, ior=2.0*A, oior=1.0-A},
+	      maps=Maps}.
     
 %%%%%%%%%
 
 pack_materials(Mats) ->
     lists:foldl(fun(#material{m_info=Mat}, Bin) -> 
-			pack_material(Mat, Bin)
+			pack_material(Mat, Bin);
+		   (Int, Bin) when is_integer(Int) -> %% Light
+			Bin
 		end, <<>>, Mats).
 			 
 pack_material(#matte{kd={R,G,B}}, Bin) ->
@@ -248,10 +250,14 @@ pack_material(#archglass{refl={DR,DG,DB}, refr={RR,RG,RB}, rsb=RSB, tsb=TSB,
       RR:?F32, RG:?F32, RB:?F32, 
       MaF:?F32, TF:?F32, MaPdf:?F32, MiPdf:?F32, 
       RSB:8, TSB:8,
-      0:(8*(?MAT_MAX_SZ-?MAT_ARCHGLASS_SZ))>>.
+      0:(8*(?MAT_MAX_SZ-?MAT_ARCHGLASS_SZ))>>;
+pack_material(Mat, Bin) -> 
+    io:format("Ignoring unknown material ~p~n", [Mat]),
+    Bin.
 
 %%%%%
-filter({R,G,B}) -> max(R,max(G,B)).
+filter({R,G,B}) -> max(R,max(G,B));
+filter({R,G,B,_}) -> max(R,max(G,B)).
     
 sample_f(#material{m_info=#matte{kdOverPi=KdOPi}}, 
 	 _RayD, _N, ShadeN = {NX,NY,NZ}) ->
@@ -331,9 +337,9 @@ sample(Lamba, #spd{max=Max}) when Lamba > Max -> 0.0;
 sample(Lamba, #spd{n=N, min=Min, invdelta=ID, samples=S}) ->
     X = (Lamba - Min) * ID,
     B0 = trunc(X),
-    B1 = min(B0+1, N-1),
+    B1 = min(B0+2, N),
     Dx = X - B0,
-    lerp(Dx, element(B0+1, S), element(B1+2, S)).
+    lerp(Dx, element(B0+1, S), element(B1, S)).
 
 spd_to_rgb(Spd = #spd{}) ->
     smul(spd_to_rgb(0, snew(), Spd), 683.0). 
@@ -344,12 +350,16 @@ spd_to_rgb(I0, {R,G,B}, Spd) when I0 < ?N_CIE ->
     RGB = {R+V*element(I1, ?CIE_X), 
 	   G+V*element(I1, ?CIE_Y), 
 	   B+V*element(I1, ?CIE_Z)},
-    spd_to_rgb(I1, RGB, Spd).
-	    
+    spd_to_rgb(I1, RGB, Spd);
+spd_to_rgb(_, RGB, _) -> RGB.
+
 while_smaller(K, L, T) when element(K,T) < L ->
     while_smaller(K+1, L, T);
-while_smaller(K, _, _) -> K.
-    
+while_smaller(K, _, T) -> 
+    case tuple_size(T) < K of
+	true -> tuple_size(T);
+	false -> K
+    end.
  
 lerp(T, V1, V2) ->
     (1.0 - T) * V1 + T*V2.

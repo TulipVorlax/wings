@@ -10,6 +10,7 @@
 
 -export([create_lookup/1, lookup_id/2, init/2,
 	 new/2, get_light/2, get_infinite_light/1,
+	 pack_light/2, pack_light/1,
 	 sample_all_lights/1,
 	 sample_L/1, sample_L/2,
 	 pdf/1, le/2, power/1
@@ -17,6 +18,7 @@
 
 -include("pbr.hrl").
 -include("pbr_constants.hrl").
+-include_lib("wings/src/wings.hrl").
 
 %% List of lights
 %% Light is {type, type_specific_record}
@@ -73,7 +75,7 @@ init_light(infinite, L, WBB) ->
     Pos  = proplists:get_value(position, L),
     Aim  = proplists:get_value(aim_point, L),
     Pbr  = proplists:get_value(pbr, L, []),
-    Turb = proplists:get_value(turbulance, Pbr, 5.0),
+    Turb = proplists:get_value(turbulance, Pbr, 2.2),
     Size = proplists:get_value(size, Pbr, 5.5),
     Vec = e3d_vec:norm(e3d_vec:sub(Aim,Pos)),
     Sun = new({sunlight, Vec, Turb, Size}, WBB),
@@ -90,6 +92,54 @@ get_light(Id, Ls) ->
 
 get_infinite_light(Ls) ->
     false.
+
+pack_light(Type, Ls0) ->
+    Ls = array:to_list(Ls0),
+    case find_light(Type, Ls) of
+	undefined -> undefined;
+	Light -> pack_light(Light)
+    end.
+
+pack_light(#skylight{gain={GR,GG,GB}, thetaS=ThetaS, phiS=PhiS, 
+		     zenith_Y=ZY, zenith_x=Zx, zenith_y=Zy,
+		     perez_Y=PY, perez_x=Px, perez_y=Py
+		    }) -> 
+    {PY1,PY2,PY3,PY4,PY5,PY6} = PY,
+    {Px1,Px2,Px3,Px4,Px5,Px6} = Px,
+    {Py1,Py2,Py3,Py4,Py5,Py6} = Py,
+
+    <<GR:?F32, GG:?F32, GB:?F32,
+      ThetaS:?F32, PhiS:?F32,
+      ZY:?F32, Zx:?F32, Zy:?F32,
+      PY1:?F32,PY2:?F32,PY3:?F32,PY4:?F32,PY5:?F32,PY6:?F32,
+      Px1:?F32,Px2:?F32,Px3:?F32,Px4:?F32,Px5:?F32,Px6:?F32,
+      Py1:?F32,Py2:?F32,Py3:?F32,Py4:?F32,Py5:?F32,Py6:?F32
+    >>;
+
+pack_light(#sunlight{gain={GR,GG,GB}, 
+		     dir={Vx,Vy,Vz}, 
+		     turbidity=Turb,
+		     relSize=Sz,
+		     x={Xx,Xy,Xz}, y={Yx, Yy,Yz}, 
+		     cosThetaMax=CTM, 
+		     sunColor={SR,SG,SB}
+		    }) ->     
+    <<Vx:?F32, Vy:?F32, Vz:?F32,
+      GR:?F32, GG:?F32, GB:?F32,
+      Turb:?F32, Sz:?F32, 
+      Xx:?F32, Xy:?F32, Xz:?F32,
+      Yx:?F32, Yy:?F32, Yz:?F32,
+      CTM:?F32, 
+      SR:?F32, SG:?F32, SB:?F32
+    >>.
+
+find_light(sunlight, [#sunskylight{sun=Sun}|_]) -> Sun;
+find_light(skylight, [#sunskylight{sky=Sky}|_]) -> Sky;    
+find_light(Type, [Light|_]) when element(1,Light) =:= Type ->
+    Light;
+find_light(Type, [_|Ls]) -> find_light(Type, Ls);
+find_light(_, []) -> undefined.
+
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -163,19 +213,22 @@ new({skylight, Vec, T}, _WBB) ->
 	(-0.04214 * Theta3 + 0.08970 * Theta2 - 0.04153 * ThetaS  + 0.00516) * T +
 	(0.15346 * Theta3 - 0.26756 * Theta2 + 0.06670 * ThetaS  + 0.26688),
 
-    Perez_Y = {(0.1787 * T  - 1.4630) * Aconst,
+    Perez_Y = {0.0, 
+	       (0.1787 * T  - 1.4630) * Aconst,
 	       (-0.3554 * T  + 0.4275) * Bconst,
 	       (-0.0227 * T  + 5.3251) * Cconst,
 	       (0.1206 * T  - 2.5771) * Dconst,
 	       (-0.0670 * T  + 0.3703) * Econst},
     
-    Perez_x = {(-0.0193 * T  - 0.2592) * Aconst,
+    Perez_x = {0.0, 
+	       (-0.0193 * T  - 0.2592) * Aconst,
 	       (-0.0665 * T  + 0.0008) * Bconst,
 	       (-0.0004 * T  + 0.2125) * Cconst,
 	       (-0.0641 * T  - 0.8989) * Dconst,
 	       (-0.0033 * T  + 0.0452) * Econst},
 
-    Perez_y = {(-0.0167 * T  - 0.2608) * Aconst,
+    Perez_y = {0.0, 
+	       (-0.0167 * T  - 0.2608) * Aconst,
 	       (-0.0950 * T  + 0.0092) * Bconst,
 	       (-0.0079 * T  + 0.2102) * Cconst,
 	       (-0.0441 * T  - 1.6537) * Dconst,
@@ -189,12 +242,15 @@ new({skylight, Vec, T}, _WBB) ->
 	      thetaS=ThetaS, phiS=PhiS, 
 	      zenith_Y=Zenith_Y, zenith_x=Zenith_x, zenith_y=Zenith_y, 
 	      perez_Y=Perez_Y, perez_x=Perez_x, perez_y=Perez_y
-	     }.
+	     };
+
+new(_, _) -> undefined.
+
 
 perezBase(Lam, Theta, Gamma) ->
-    (1.0 + element(1,Lam) * math:exp(element(2,Lam) / math:cos(Theta))) *
-	(1.0 + element(3,Lam) * math:exp(element(4,Lam) * Gamma)  
-	 + element(5,Lam) * math:cos(Gamma) * math:cos(Gamma)).
+    (1.0 + element(2,Lam) * math:exp(element(3,Lam) / math:cos(Theta))) *
+	(1.0 + element(4,Lam) * math:exp(element(5,Lam) * Gamma)  
+	 + element(6,Lam) * math:cos(Gamma) * math:cos(Gamma)).
 
 %%
 

@@ -36,12 +36,13 @@ MODULES= \
 	pbr_light \
 	pbr_mat \
 	pbr_mc \
+	pbr_pathgpu \
 	pbr_renderer \
 	pbr_scene 
 
 TARGET_FILES= $(MODULES:%=$(EBIN)/%.beam)
 
-HEADER_FILES= pbr.hrl
+HEADER_FILES= pbr.hrl pbr_constants.hrl
 
 # ----------------------------------------------------
 # FLAGS
@@ -56,10 +57,7 @@ opt debug:
 	mkdir -p $(EBIN)
 	$(MAKE) TYPE=$@ common
 
-common: $(TARGET_FILES) subdirs
-
-subdirs: 
-	(cd kernels; $(MAKE))
+common: $(TARGET_FILES) 
 
 template: opt
 	erl -pa $(WINGS_INTL) -noinput -run tools generate_template $(EBIN) -run erlang halt

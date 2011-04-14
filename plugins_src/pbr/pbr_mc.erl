@@ -63,7 +63,7 @@ sample_triangle(U1,U2) ->
 %%% 
 
 spherical_phi({X,Y,_Z}) ->
-    positive(math:atan(Y,X)).
+    positive(math:atan2(Y,X)).
 
 spherical_theta({_, _, Z}) ->
     math:acos(clamp(Z, -1.0, 1.0)).

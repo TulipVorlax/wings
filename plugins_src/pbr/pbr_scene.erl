@@ -80,9 +80,9 @@ init(St = #st{shapes=Shapes,mat=Mtab0}, Opts, R = #renderer{cl=CL0}) ->
 	      end,
     AccelBin = {WBB,_,_,_} = ?TC(e3d_qbvh:init([{Size,GetTri}])),
 
-    Scene = #scene{info=GetFace, lights=pbr_light:init(Lights, WBB), 
-		   world_bb=WBB, data=Data, no_fs=Size, fsmap=F2M},
-    {CL, Scene} = init_accel(CL0, AccelBin, Scene),
+    Scene0 = #scene{info=GetFace, lights=pbr_light:init(Lights, WBB), 
+		    world_bb=WBB, data=Data, no_fs=Size, fsmap=F2M},
+    {CL, Scene} = init_accel(CL0, AccelBin, Scene0),
     R#renderer{cl=CL, scene=Scene}.
 
 vertices(#renderer{scene=#scene{data=Data}}) ->
@@ -194,7 +194,8 @@ prepare_mesh([We = #we{name=Name}|Wes], Opts, Mtab, Ls, St, AccData, MatList)
     IsLight = ?IS_ANY_LIGHT(We),
     {SubDiv,LightId}  = 
 	case IsLight of 
-	    true when ?IS_AREA_LIGHT(We) -> %% Don't subdiv area light (option?)
+	    true when not ?IS_POINT_LIGHT(We) -> 
+		%% Don't subdiv area, ambient and infinite lights
 		{0, pbr_light:lookup_id(Name,Ls)}; 
 	    true -> %% Subdiv the point lights to be round 
 		{3, pbr_light:lookup_id(Name,Ls)}; 
@@ -239,7 +240,7 @@ append_color(N, Diff, Acc) when N > 0 ->
 append_color(_, _, Acc) -> Acc.
 
 init_accel(CL0, {_BB, Qnodes, Qtris, _Map}, Scene) ->
-    CL = wings_cl:compile("qbvh_kernel.cl", CL0),
+    CL = wings_cl:compile("utils/qbvh_kernel.cl", CL0),
     Context = wings_cl:get_context(CL),
     Copy = [read_only, copy_host_ptr],
     {ok,QN} = cl:create_buffer(Context, Copy, byte_size(Qnodes), Qnodes),

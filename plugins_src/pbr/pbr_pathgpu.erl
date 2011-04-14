@@ -9,6 +9,8 @@
 -module(pbr_pathgpu).
 -export([start/2]).
 
+-include("pbr.hrl").
+
 -record(ropt, 
 	{max_path_depth,
 	 rr_depth,
@@ -25,14 +27,14 @@ start(Attrs, RS) ->
 		 rr_imp_cap     = proplists:get_value(rr_imp_cap, Attrs, 0.125),
 		 sampler        = get_sampler(Attrs),
 		 filter         = get_filter(Attrs)},
-    init_render(ROpt, Rs),
+    init_render(ROpt, RS),
     start_processes(ROpt, RS).
 
 start_processes(Ropt, Rs) ->
-    NoThreads = erlang:system_info(schedulers),
+    %% NoThreads = erlang:system_info(schedulers),
     random:seed(now()),
-    render(1, random:uniform(1 bsl 32), 1.00, Ropt, Rs),
-    ok.
+    render(1, random:uniform(1 bsl 32), 0.00, Ropt, Rs),
+    normal.
 
 render(Id, Seed, Start, Opt, State = #renderer{cl=CL}) ->
     Context = wings_cl:get_context(CL),
@@ -40,39 +42,44 @@ render(Id, Seed, Start, Opt, State = #renderer{cl=CL}) ->
 		     {ok, Buff} = cl:create_buffer(Context, [read_write], Sz),
 		     Buff
 	     end,
-    StaticBuff = fun(Bin) ->
+    StaticBuff = fun(Bin) when is_binary(Bin) ->
 			 {ok, Buff} = cl:create_buffer(Context, 
 						       [read_only, copy_host_ptr], 
-						       binary_size(Bin), Bin),
-			 Buff
+						       byte_size(Bin), Bin),
+			 Buff;
+		    (_) -> false
 		 end,
     {X,Y} = pbr_film:resolution(State),
     %% Work areas
-    Rays = RWBuff(?RAYBUFFER_SZ),    
-    Hits = RWBuff(?RAYHIT_SZ*?MAX_RAYS),
-    FrameBuffer = RWBuff(?RAYHIT_SZ*X*Y),
+    RaysB = RWBuff(?RAYBUFFER_SZ),    
+    HitsB = RWBuff(?RAYHIT_SZ*?MAX_RAYS),
+    FrameBufferB = RWBuff(?RAYHIT_SZ*X*Y),
     %% Static Scene buffers
     {Face2Mesh, Mesh2Mat, Mats} = pbr_scene:mesh2mat(State),
-    MeshIds   = StaticBuff(Face2Mesh),  
-    Mesh2Mat  = StaticBuff(Mesh2Mat),
-    Materials = StaticBuff(pbr_mat:pack_materials(Mats)),
-    Colors    = StaticBuff(pbr_scene:vertex_colors(State)),
-    Normals   = StaticBuff(pbr_scene:normals(State)),
-    Triangles = StaticBuff(pbr_scene:triangles(State)),
-    Vertices  = StaticBuff(pbr_scene:vertices(State)),
+    MeshIdsB   = StaticBuff(Face2Mesh),
+    Mesh2MatB  = StaticBuff(Mesh2Mat),
+    MaterialsB = StaticBuff(pbr_mat:pack_materials(Mats)),
+    ColorsB    = StaticBuff(pbr_scene:vertex_colors(State)),
+    NormalsB   = StaticBuff(pbr_scene:normals(State)),
+    TrianglesB = StaticBuff(pbr_scene:triangles(State)),
+    VerticesB  = StaticBuff(pbr_scene:vertices(State)),
 
-    %% Static Lights
-    %% AreaLight = StatBuff(pbr_light:bin_area(State)),
+    %% Lights
+    %% AreaLight = StatBuff(pbr_light:pack_area(State)),
     %% InfiniteLight = ...
+    Lights = pbr_scene:get_lights(State),
+    SunLightB = StaticBuff(pbr_light:pack_light(sunlight, Lights)),
+    SkyLightB = StaticBuff(pbr_light:pack_light(skylight, Lights)),
+    
+    SunLightB /= false orelse SkyLightB /= false orelse exit(no_light),
     
     %% Textures 
-
-    
-
+        
+    io:format("Everything packed~n",[]),
     ok.
 
 init_render(Opts, Rs) ->
-    ok
+    ok.
 
 
 %% Helpers
@@ -87,8 +94,8 @@ get_sampler(stratified, Attrs) ->
     #sampler{type=stratified, opts=[Samples]};
 get_sampler(metropolis, Attrs) ->
     #sampler{type=metropolis,
-	     opts=[{rate   = proplists:get_value(metropolis_rate,Attrs,0.4),
-		    reject = proplists:get_value(metropolis_reject,Attrs,512)
+	     opts=[{rate,proplists:get_value(metropolis_rate,Attrs,0.4),
+		    reject,proplists:get_value(metropolis_reject,Attrs,512)
 		   }]}.
 
 get_filter(Attrs) ->
