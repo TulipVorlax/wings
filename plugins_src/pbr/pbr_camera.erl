@@ -9,15 +9,20 @@
 -module(pbr_camera).
 
 -include("pbr.hrl").
+-include_lib("wings/src/wings.hrl").
 
 -export([init/2,
 	 get_size/1,
+	 get_fdist/1,
+	 get_near_far/1,
+	 pack_matrixes/1,
 	 generate_ray/3]).
 
 -record(cam, 
 	{
 	  w,h,		                        % Width Height
 	  near,far,
+	  f_dist,                               % Focus distance
 	  c2w,					% Camera to world
 	  r2c,					% Raster to camera
 	  %%  TODO unneeded? keeping temporary for debugging.
@@ -31,7 +36,7 @@ init(Attr, R=#renderer{}) ->
     {Pos,Dir,Up} = proplists:get_value(pos_dir_up, CamProps),
     %% io:format("Pos Dir Up ~p ~p~n", [(Pos), (Dir)]),
     World2Cam = e3d_transform:lookat(Pos, e3d_vec:add(Pos,Dir), Up),
-
+    
     AspectRatio = XRes/YRes,
 
     Near = proplists:get_value(hither, CamProps),
@@ -66,6 +71,7 @@ init(Attr, R=#renderer{}) ->
     
     Cam = #cam{w=XRes, h=YRes,
 	       near=Near, far=Far,
+	       f_dist = e3d_vec:len(Dir),
 	       c2w = e3d_transform:inverse(World2Cam),
 	       r2c = Raster2Camera,
 	       s2r = Screen2Raster,
@@ -75,6 +81,25 @@ init(Attr, R=#renderer{}) ->
 
 get_size(#renderer{cam=#cam{w=W, h=H}}) ->
     {W,H}.
+
+get_fdist(#renderer{cam=#cam{f_dist=FDist}}) ->
+    FDist.
+
+
+get_near_far(#renderer{cam=#cam{near=Near, far=Far}}) ->
+    {Near,Far}.
+
+pack_matrixes(#renderer{cam=#cam{c2w=C2W,r2c=R2C}}) ->
+    Bin = pack_matrix(e3d_transform:matrix(R2C), <<>>),
+    pack_matrix(e3d_transform:matrix(C2W), Bin).
+
+pack_matrix({A,B,C,WX,D,E,F,WY,G,H,I,WZ,Tx,Ty,Tz,WW}, Bin) ->
+    <<Bin/binary, 
+      A:?F32,B:?F32,C:?F32,WX:?F32,
+      D:?F32,E:?F32,F:?F32,WY:?F32,
+      G:?F32,H:?F32,I:?F32,WZ:?F32,
+      Tx:?F32,Ty:?F32,Tz:?F32,WW:?F32>>.
+
 
 generate_ray(#renderer{cam=Cam},X,Y) when is_float(X), is_float(Y) ->
     #cam{r2c=R2C, c2w=C2W, near=Near, far=Far} = Cam,

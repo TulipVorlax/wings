@@ -15,7 +15,7 @@
 -include_lib("cl/include/cl.hrl").
 
 -export([is_available/0,
-	 setup/0, compile/2, get_context/1, get_device/1,
+	 setup/0, compile/2, compile/3, get_context/1, get_device/1,
 	 cast/5, write/3, read/4,
 	 tcast/5
 	]).
@@ -55,10 +55,24 @@ setup() ->
     #cli{context=CL#cl.context, q=Queue, device=Device, cl=CL}.
 
 %% compile(File,cli()) -> cli().
-compile(File, CLI = #cli{cl=CL, device=Device}) ->
+%% 
+compile(File = [A|_], CLI) when is_integer(A) ->
+    compile_1([File], "", CLI);
+compile(Files, CLI) ->
+    compile_1(Files, "", CLI).
+
+compile(File = [A|_], Defs, CLI) when is_integer(A) ->
+    compile_1([File], Defs, CLI);
+compile(Files, Defs, CLI) ->
+    compile_1(Files, Defs, CLI).
+
+compile_1(Files, Defs, CLI = #cli{cl=CL, device=Device}) ->
     Dir = filename:join(code:lib_dir(wings),"shaders"),
-    {ok, Bin} = file:read_file(filename:join([Dir, File])),
-    case clu:build_source(CL, Bin) of
+    Bins = lists:map(fun(File) ->
+			     {ok, Bin} = file:read_file(filename:join([Dir, File])),
+			     Bin
+		     end, Files),
+    case build_source(CL, Bins, Defs) of
 	{error, {Err={error,build_program_failure}, _}} ->
 	    %% io:format("~s", [Str]),
 	    exit(Err);
@@ -69,6 +83,37 @@ compile(File, CLI = #cli{cl=CL, device=Device}) ->
 	    cl:release_program(Program),
 	    CLI#cli{kernels=Kernels}
     end.
+
+build_source(E, Source, Defines) ->
+    {ok,Program} = cl:create_program_with_source(E#cl.context,Source),
+    case cl:build_program(Program, E#cl.devices, Defines) of
+	ok ->
+	    Status = [cl:get_program_build_info(Program, Dev, status)
+		      || Dev <- E#cl.devices],
+	    case lists:any(fun({ok, success}) -> true; 
+			      (_) -> false end, Status) 
+	    of
+		true -> 
+		    {ok,Program};
+		false ->
+		    Logs = get_program_logs(Program),
+		    io:format("Logs: ~s\n", [Logs]),
+		    {error,{Status,Logs}}
+	    end;
+	Error ->
+	    Logs = get_program_logs(Program),
+	    io:format("Logs: ~s\n", [Logs]),
+	    cl:release_program(Program),
+	    {error,{Error,Logs}}
+    end.
+
+get_program_logs(Program) ->
+    {ok,DeviceList} = cl:get_program_info(Program, devices),
+    lists:map(fun(Device) ->
+		      {ok,Log} = cl:get_program_build_info(Program,Device,log),
+		      Log
+	      end, DeviceList).
+
 
 kernel_info(K,Device, MaxWGS) ->
     {ok, WG} = cl:get_kernel_workgroup_info(K, Device, work_group_size),
