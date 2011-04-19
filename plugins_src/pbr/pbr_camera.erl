@@ -15,7 +15,7 @@
 	 get_size/1,
 	 get_fdist/1,
 	 get_near_far/1,
-	 pack_matrixes/1,
+	 pack_camera/2,
 	 generate_ray/3]).
 
 -record(cam, 
@@ -85,12 +85,12 @@ get_size(#renderer{cam=#cam{w=W, h=H}}) ->
 get_fdist(#renderer{cam=#cam{f_dist=FDist}}) ->
     FDist.
 
-
 get_near_far(#renderer{cam=#cam{near=Near, far=Far}}) ->
     {Near,Far}.
 
-pack_matrixes(#renderer{cam=#cam{c2w=C2W,r2c=R2C}}) ->
-    Bin = pack_matrix(e3d_transform:matrix(R2C), <<>>),
+pack_camera(LensR, #renderer{cam=#cam{c2w=C2W,r2c=R2C, f_dist=FDist, near=Near, far=Far}}) ->
+    Bin0 = <<LensR:?F32, FDist:?F32, Far:?F32, Near:?F32>>,
+    Bin = pack_matrix(e3d_transform:matrix(R2C), Bin0),
     pack_matrix(e3d_transform:matrix(C2W), Bin).
 
 pack_matrix({A,B,C,WX,D,E,F,WY,G,H,I,WZ,Tx,Ty,Tz,WW}, Bin) ->

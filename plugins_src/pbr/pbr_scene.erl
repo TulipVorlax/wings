@@ -12,7 +12,7 @@
 -include_lib("wings/src/wings.hrl").
 
 -export([init/3,
-	 intersect/2,
+	 intersect/2, intersect_data/1,	 
 	 get_lights/1,
 	 get_infinite_light/1,
 	 get_face_info/6,
@@ -187,6 +187,10 @@ intersect({NoRays, RaysBin}, #renderer{scene=Scene, cl=CL}) ->
     Running = wings_cl:read(Hits, HitSz, [Run], CL),
     {ok, <<Result:HitSz/binary, _/binary>>} = cl:wait(Running, 1000),
     {Rays, Result}.
+
+intersect_data(#renderer{scene=Scene}) ->    
+    {Qn, Qt, _Rays, _Hits, WGSz} = Scene#scene.isect,
+    {Qn, Qt, {local,24*WGSz*4}}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 prepare_mesh([We = #we{name=Name}|Wes], Opts, Mtab, Ls, St, AccData, MatList)

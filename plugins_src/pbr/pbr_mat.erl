@@ -9,7 +9,7 @@
 -module(pbr_mat).
 
 -export([snew/0, sdiv/2, smul/2, sadd/2, sY/1, s_is_black/1, to_rgb/1,
-	 init/1, pack_materials/1,
+	 init/1, pack_materials/1, type/1,
 	 sample_f/4, f/4, lookup/3, is_light/1, is_diffuse/1]).
 
 -export([spd/3, irregular_spd/2,irregular_spd/3,
@@ -254,6 +254,10 @@ pack_material(#archglass{refl={DR,DG,DB}, refr={RR,RG,RB}, rsb=RSB, tsb=TSB,
 pack_material(Mat, Bin) -> 
     io:format("Ignoring unknown material ~p~n", [Mat]),
     Bin.
+
+
+type(#material{m_info=Record}) ->
+    element(1, Record).
 
 %%%%%
 filter({R,G,B}) -> max(R,max(G,B));

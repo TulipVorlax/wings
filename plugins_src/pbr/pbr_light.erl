@@ -172,6 +172,7 @@ new({sunlight, Vec, Turb, RelSize}, _WBB) ->
 	end,
     
     ThetaS = pbr_mc:spherical_theta(Vec),
+    %%ThetaS = pbr_mc:spherical_phi(Vec),
     
     Beta = 0.04608365822050 * Turb - 0.04586025928522,
     M = 1.0 / (math:cos(ThetaS) + 0.00094 * 
