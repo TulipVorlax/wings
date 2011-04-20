@@ -77,7 +77,6 @@ start(Attrs, SceneS) ->
     io:format("Rendering done ~n",[]),
     Res.
 
-
 start_processes(Ropt, SceneS0) ->
     %% NoThreads = erlang:system_info(schedulers),
     random:seed(now()),
@@ -111,8 +110,10 @@ render_loop(0, Wait, CL, Data = {StartTime, FB, RI, SceneS0}) ->
 		true ->
 		    SceneS1 = update_film(Wait, FB, SceneS0, CL),
 		    render_loop(10, [], CL, {os:timestamp(), FB, RI, SceneS1});
-		false ->
-		    render_loop(10, Wait, CL, Data)
+		false -> 
+		    %% Flush queue
+		    ok = cl:wait(hd(Wait)),
+		    render_loop(10, tl(Wait), CL, Data)
 	    end
     end.
 
@@ -278,7 +279,7 @@ light_params(#ps{skylight=SkyLightB, sunlight=SunLightB, arealightn=AreaLightN, 
 	     " -D PARAM_HAS_SUNLIGHT " ++
 		 " -D PARAM_DIRECT_LIGHT_SAMPLING" ++
 		 " -D PARAM_DL_LIGHT_COUNT=0";	     
-	SunLightB ->
+	SunLightB, AreaLightN > 0 ->
 	     " -D PARAM_HAS_SUNLIGHT" ++ 
 		 " -D PARAM_DIRECT_LIGHT_SAMPLING" ++
 		 param("PARAM_DL_LIGHT_COUNT", AreaLightN);

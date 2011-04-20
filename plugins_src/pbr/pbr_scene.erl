@@ -8,8 +8,8 @@
 
 -module(pbr_scene).
 
--include("pbr.hrl").
 -include_lib("wings/src/wings.hrl").
+-include("pbr.hrl").
 
 -export([init/3,
 	 intersect/2, intersect_data/1,	 

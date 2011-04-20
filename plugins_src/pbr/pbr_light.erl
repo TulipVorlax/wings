@@ -18,7 +18,6 @@
 
 -include("pbr.hrl").
 -include("pbr_constants.hrl").
--include_lib("wings/src/wings.hrl").
 
 %% List of lights
 %% Light is {type, type_specific_record}
