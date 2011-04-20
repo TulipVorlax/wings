@@ -55,7 +55,7 @@
 	  meshbumpsscale,
 	  uvsb,
 	  %% Camera
-	  cam}).	 
+	  cam}).
 
 -define(ifelse(A,B,C), if (A) -> (B); true -> (C) end).
 -define(FSz, 4).
@@ -86,17 +86,19 @@ start_processes(Ropt, SceneS0) ->
 render(SceneS = #renderer{cl=CL}, #ps{framebuffer=FB, rays=RaysB, hits=HitsB}, 
        #ropt{refresh=RI}, IAs) ->
     {X,Y} = pbr_film:resolution(SceneS),
-    W0 = wings_cl:cast('InitFrameBuffer', [FB], X*Y, [], CL),    
-    W1 = wings_cl:cast('Init', IAs, ?MAX_RAYS, [], CL),
+    erlang:display([?MODULE,?LINE]),
+    W0 = wings_cl:tcast('InitFrameBuffer', [FB], X*Y, [], CL),    
+    W1 = wings_cl:tcast('Init', IAs, ?MAX_RAYS, [], CL),
     StartTime = os:timestamp(),
     {Qn,Qt,LocalMem} = pbr_scene:intersect_data(SceneS),
     wings_cl:set_args('Intersect', [RaysB, HitsB, Qn, Qt, ?MAX_RAYS, LocalMem], CL),
     render_loop(10, [W0,W1], CL, {StartTime, FB, RI, SceneS}).
 
 render_loop(N, Wait, CL, Data) when N > 0 ->
-    W1 = wings_cl:cast('Sampler', ?MAX_RAYS, Wait, CL),
-    W2 = wings_cl:cast('Intersect', ?MAX_RAYS, [W1], CL),
-    W3 = wings_cl:cast('AdvancePaths', ?MAX_RAYS, [W2], CL),
+    io:format("Render loop ~p~n",[N]),
+    W1 = wings_cl:tcast('Sampler', ?MAX_RAYS, Wait, CL),
+    W2 = wings_cl:tcast('Intersect', ?MAX_RAYS, [W1], CL),
+    W3 = wings_cl:tcast('AdvancePaths', ?MAX_RAYS, [W2], CL),
     cl:wait(W3),
     exit(foo),
     render_loop(N-1, [W3], CL, Data);
@@ -121,24 +123,30 @@ update_film(Wait, FB, SceneS, CL) ->
     {X,Y} = pbr_film:resolution(SceneS),
     W0 = cl:read(FB, X*Y*?RAYHIT_SZ, Wait, CL),
     {ok, SampleBuff} = cl:wait(W0),
-    Scene = pbr_film:set_raw(SampleBuff),
+    Scene = pbr_film:set_sample_frame_buffer(SampleBuff, SceneS),
     pbr_film:show(Scene),
     Scene.
 
 init_render(_Id, Seed, Start, Opts, SceneS0) ->
     PS1 = #ps{},
     MeshBuffs = {_, _, Materials} = pbr_scene:mesh2mat(SceneS0),
+    erlang:display([?MODULE,?LINE]),
     PS2 = create_scene_buffs(PS1, MeshBuffs, SceneS0),
+    erlang:display([?MODULE,?LINE]),
     PS3 = create_light_buffs(PS2, SceneS0),
-    PS4 = create_tex_buffs(PS3, SceneS0),    
+    erlang:display([?MODULE,?LINE]),
+    PS4 = create_tex_buffs(PS3, SceneS0),
+    erlang:display([?MODULE,?LINE]),    
     CamBin = pbr_camera:pack_camera(Opts#ropt.lens_r, SceneS0), 
     PS5 = PS4#ps{cam=wings_cl:buff(CamBin, SceneS0#renderer.cl)},
+    erlang:display([?MODULE,?LINE]),
     PS  = create_work_buffs(PS5, calc_task_size(PS5, Opts), SceneS0), 
     io:format("Everything packed~n",[]),    
 
     CompilerParams = create_params(Seed, Start, Materials, Opts, PS, SceneS0),
     SceneS = compile(SceneS0, CompilerParams),
     SamplerArgs = sampler_args(PS, Opts, SceneS),
+    erlang:display([?MODULE,?LINE]),
     AdvancePathsArgs = advance_paths_args(PS), 
     wings_cl:set_args('Sampler', SamplerArgs, SceneS#renderer.cl),
     wings_cl:set_args('AdvancePaths', AdvancePathsArgs, SceneS#renderer.cl),

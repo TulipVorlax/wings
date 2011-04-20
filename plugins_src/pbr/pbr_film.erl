@@ -124,8 +124,8 @@ show_image(Pixels, {W,H}) when is_binary(Pixels) ->
 init_cl(false, _, R) -> R;
 init_cl(true, Film = #f{gamma_table=GammaT, res={W,H}}, RS=#renderer{cl=CL0}) ->
     CL = wings_cl:compile("pbr/framebuffer.cl", CL0),
-    GammaB = wings_cl:buff(table_to_bin(GammaT)),
-    GausFB = wings_cl:buff(table_to_bin(gaussion_table())),
+    GammaB = wings_cl:buff(table_to_bin(GammaT), CL0),
+    GausFB = wings_cl:buff(table_to_bin(gaussion_table()), CL0),
     FB  = wings_cl:buff(W*H*?PIXEL_SZ,CL),
     %% Create this when/if needed
     %% SFB = wings_cl:buff(W*H*?PIXEL_SZ,CL),

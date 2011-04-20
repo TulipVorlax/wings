@@ -82,7 +82,9 @@ init(St = #st{shapes=Shapes,mat=Mtab0}, Opts, R = #renderer{cl=CL0}) ->
 
     Scene0 = #scene{info=GetFace, lights=pbr_light:init(Lights, WBB), 
 		    world_bb=WBB, data=Data, no_fs=Size, fsmap=F2M},
+    erlang:display([?MODULE,?LINE]),
     {CL, Scene} = init_accel(CL0, AccelBin, Scene0),
+    erlang:display([?MODULE,?LINE]),
     R#renderer{cl=CL, scene=Scene}.
 
 vertices(#renderer{scene=#scene{data=Data}}) ->
@@ -244,13 +246,18 @@ append_color(N, Diff, Acc) when N > 0 ->
 append_color(_, _, Acc) -> Acc.
 
 init_accel(CL0, {_BB, Qnodes, Qtris, _Map}, Scene) ->
+    erlang:display([?MODULE,?LINE]),
     CL = wings_cl:compile("utils/qbvh_kernel.cl", CL0),
+    erlang:display([?MODULE,?LINE]),
     Context = wings_cl:get_context(CL),
     Copy = [read_only, copy_host_ptr],
+    erlang:display([?MODULE,?LINE]),
     {ok,QN} = cl:create_buffer(Context, Copy, byte_size(Qnodes), Qnodes),
     {ok,QT} = cl:create_buffer(Context, Copy, byte_size(Qtris), Qtris),
+    erlang:display([?MODULE,?LINE]),
     {ok,Rays} = cl:create_buffer(Context, [read_write],  ?RAYBUFFER_SZ),
     {ok,Hits} = cl:create_buffer(Context, [write_only], ?RAYHIT_SZ*?MAX_RAYS),
+    erlang:display([?MODULE,?LINE]),
     %%Device  = wings_cl:get_device(CL),
     %% {ok,Local} = cl:get_kernel_workgroup_info(Kernel, Device, work_group_size),
     %% {ok,Mem} = cl:get_kernel_workgroup_info(Kernel, Device, local_mem_size),
