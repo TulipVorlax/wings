@@ -19,7 +19,8 @@
 	 get_context/1, get_device/1,
 	 buff/2, buff/3, write/3, read/4,
 	 cast/4, cast/5, tcast/4, tcast/5, set_args/3,
-	 get_wg_sz/2, set_wg_sz/3
+	 get_wg_sz/2, set_wg_sz/3,
+	 get_lmem_sz/2
 	]).
 
 -record(cli, {context, kernels=[], q, cl, device}).
@@ -133,6 +134,11 @@ get_device(#cli{device=Device}) ->
 set_args(Name, Args, #cli{kernels=Ks}) ->
     #kernel{id=K} = lists:keyfind(Name, 2, Ks),
     set_args_1(Name, K, Args).
+
+get_lmem_sz(Name, #cli{kernels=Ks, device=Device}) ->
+    #kernel{id=Kernel} = lists:keyfind(Name, 2, Ks),
+    {ok,Mem} = cl:get_kernel_workgroup_info(Kernel, Device, local_mem_size),
+    Mem.    
 
 get_wg_sz(Name, #cli{kernels=Ks}) ->
     #kernel{wg=Wg} = lists:keyfind(Name, 2, Ks),

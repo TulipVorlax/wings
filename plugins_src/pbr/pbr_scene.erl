@@ -247,22 +247,20 @@ append_color(_, _, Acc) -> Acc.
 
 init_accel(CL0, {_BB, Qnodes, Qtris, _Map}, Scene) ->
     erlang:display([?MODULE,?LINE]),
-    CL = wings_cl:compile("utils/qbvh_kernel.cl", CL0),
+    CL1 = wings_cl:compile("utils/qbvh_kernel.cl", CL0),
     erlang:display([?MODULE,?LINE]),
-    Context = wings_cl:get_context(CL),
-    Copy = [read_only, copy_host_ptr],
     erlang:display([?MODULE,?LINE]),
-    {ok,QN} = cl:create_buffer(Context, Copy, byte_size(Qnodes), Qnodes),
-    {ok,QT} = cl:create_buffer(Context, Copy, byte_size(Qtris), Qtris),
+    QN = wings_cl:buff(Qnodes, CL1),
+    QT = wings_cl:buff(Qtris, CL1),
     erlang:display([?MODULE,?LINE]),
-    {ok,Rays} = cl:create_buffer(Context, [read_write],  ?RAYBUFFER_SZ),
-    {ok,Hits} = cl:create_buffer(Context, [write_only], ?RAYHIT_SZ*?MAX_RAYS),
+    Rays = wings_cl:buff(?RAYBUFFER_SZ, CL1),
+    Hits = wings_cl:buff(?RAYHIT_SZ*?MAX_RAYS, CL1),
     erlang:display([?MODULE,?LINE]),
     %%Device  = wings_cl:get_device(CL),
     %% {ok,Local} = cl:get_kernel_workgroup_info(Kernel, Device, work_group_size),
     %% {ok,Mem} = cl:get_kernel_workgroup_info(Kernel, Device, local_mem_size),
     %% io:format("Scene: WG ~p LMem ~p~n",[Local,Mem]),
-    
+    CL = wings_cl:set_wg_sz('Intersect', 64, CL1),
     {CL, Scene#scene{isect={QN, QT, Rays, Hits, 64}}}.
 
 i_col(B0,B1,B2, {{V1x,V1y,V1z}, {V2x,V2y,V2z}, {V3x,V3y,V3z}}) 
