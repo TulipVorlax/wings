@@ -82,9 +82,8 @@ init(St = #st{shapes=Shapes,mat=Mtab0}, Opts, R = #renderer{cl=CL0}) ->
 
     Scene0 = #scene{info=GetFace, lights=pbr_light:init(Lights, WBB), 
 		    world_bb=WBB, data=Data, no_fs=Size, fsmap=F2M},
-    erlang:display([?MODULE,?LINE]),
     {CL, Scene} = init_accel(CL0, AccelBin, Scene0),
-    erlang:display([?MODULE,?LINE]),
+    io:format("No of faces ~p => no verts ~p~n", [Size, Size*3]),
     R#renderer{cl=CL, scene=Scene}.
 
 vertices(#renderer{scene=#scene{data=Data}}) ->
@@ -196,17 +195,17 @@ intersect_data(#renderer{scene=Scene}) ->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 prepare_mesh([We = #we{name=Name}|Wes], Opts, Mtab, Ls, St, AccData, MatList)
-  when ?IS_VISIBLE(We#we.perm) ->
+  when ?IS_VISIBLE(We#we.perm), (not ?IS_ANY_LIGHT(We)) ->
     IsLight = ?IS_ANY_LIGHT(We),
     {SubDiv,LightId}  = 
 	case IsLight of 
-	    true when not ?IS_POINT_LIGHT(We) -> 
-		%% Don't subdiv area, ambient and infinite lights
-		{0, pbr_light:lookup_id(Name,Ls)}; 
-	    true -> %% Subdiv the point lights to be round 
-		{3, pbr_light:lookup_id(Name,Ls)}; 
+	    %% true when not ?IS_POINT_LIGHT(We) -> 
+	    %% 	%% Don't subdiv area, ambient and infinite lights
+	    %% 	{0, pbr_light:lookup_id(Name,Ls)}; 
+	    %% true -> %% Subdiv the point lights to be round 
+	    %% 	{3, pbr_light:lookup_id(Name,Ls)}; 
 	    false ->
-		{proplists:get_value(subdivisions, Opts, 1),false}
+		{proplists:get_value(subdivisions, Opts, 0),false}
 	end,
     Options = [{smooth, true}, {subdiv, SubDiv}, {attribs, uv}],
     Vab = wings_draw_setup:we(We, Options, St),
@@ -246,16 +245,11 @@ append_color(N, Diff, Acc) when N > 0 ->
 append_color(_, _, Acc) -> Acc.
 
 init_accel(CL0, {_BB, Qnodes, Qtris, _Map}, Scene) ->
-    erlang:display([?MODULE,?LINE]),
     CL1 = wings_cl:compile("utils/qbvh_kernel.cl", CL0),
-    erlang:display([?MODULE,?LINE]),
-    erlang:display([?MODULE,?LINE]),
     QN = wings_cl:buff(Qnodes, CL1),
     QT = wings_cl:buff(Qtris, CL1),
-    erlang:display([?MODULE,?LINE]),
     Rays = wings_cl:buff(?RAYBUFFER_SZ, CL1),
     Hits = wings_cl:buff(?RAYHIT_SZ*?MAX_RAYS, CL1),
-    erlang:display([?MODULE,?LINE]),
     %%Device  = wings_cl:get_device(CL),
     %% {ok,Local} = cl:get_kernel_workgroup_info(Kernel, Device, work_group_size),
     %% {ok,Mem} = cl:get_kernel_workgroup_info(Kernel, Device, local_mem_size),
