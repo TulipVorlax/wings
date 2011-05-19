@@ -125,7 +125,8 @@ mesh2mat(#renderer{scene=#scene{fsmap=FsMap}}) ->
 		 (_Id,NewMat,{MId,_Mat,Mats,Bin}) ->
 		      {MId+1,NewMat,[NewMat|Mats],<<Bin/binary,(MId+1):?UI32>>}
 	      end,
-    {_MId,_Mat,Mats0,Face2Mesh} = array:foldl(Collect, {-1, undefined, [], <<>>}, FsMap),
+    {_MId,_Mat,Mats0,Face2Mesh} = 
+	array:foldl(Collect, {-1, undefined, [], <<>>}, FsMap),
     Mats = lists:reverse(Mats0),
     MatOrder = fun(Mat, Acc={Id, MatsT, MatsL}) ->
 		       case gb_trees:is_defined(Mat,MatsT) of
@@ -182,10 +183,10 @@ get_face_info(#ray{o=RayO,d=RayD},T,B1,B2,FId,
     end.
 
 intersect({NoRays, RaysBin}, #renderer{scene=Scene, cl=CL}) ->
-    {Qn, Qt, Rays, Hits, WGSz} = Scene#scene.isect,
+    {Qn, Qt, Rays, Hits, WorkMem} = Scene#scene.isect,
     Wait = wings_cl:write(Rays, RaysBin, CL),
     HitSz = NoRays * ?RAYHIT_SZ,
-    Args = [Rays, Hits, Qn, Qt, NoRays, {local,24*WGSz*4}],
+    Args = [Rays, Hits, Qn, Qt, NoRays, WorkMem],
     
     Run = wings_cl:cast('Intersect', Args, NoRays, [Wait], CL),
     Running = wings_cl:read(Hits, HitSz, [Run], CL),
@@ -193,8 +194,8 @@ intersect({NoRays, RaysBin}, #renderer{scene=Scene, cl=CL}) ->
     {Rays, Result}.
 
 intersect_data(#renderer{scene=Scene}) ->    
-    {Qn, Qt, _Rays, _Hits, WGSz} = Scene#scene.isect,
-    {Qn, Qt, {local,24*WGSz*4}}.
+    {Qnodes, Qpoints, _Rays, _Hits, WorkBuff} = Scene#scene.isect,
+    {Qnodes, Qpoints, WorkBuff}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 prepare_mesh([We = #we{name=Name}|Wes], Opts, Mtab, Ls, St, AccData, MatList)
@@ -248,15 +249,20 @@ append_color(N, Diff, Acc) when N > 0 ->
 append_color(_, _, Acc) -> Acc.
 
 init_accel(CL0, {_BB, Qnodes0, Qtris0, _Map}, Scene) ->
-    Defs0 = case wings_cl:get_vendor(CL0) of
-		"NVIDIA" ++ _ -> [];
-		"Advanced Micro Dev" ++ _ -> [" -fno-alias"];
-		_ -> []
-	    end,
+    Defs0 = "-D USE_LOCAL_MEM",  %% BUGBUG only use if local_mem_size /= 0
+    {Defs1,Local} = case wings_cl:get_vendor(CL0) of
+			"NVIDIA" ++ _ -> 
+			    {[], false};
+			"Advanced Micro Dev" ++ _ -> 
+			    {[" -fno-alias"|Defs0],true};
+			_ -> 
+			    {Defs0,true}
+		    end,
     {QN,QT,Defs} = 
 	try  
+	    exit(no_image_support), %% BUGBUG
 	    wings_cl:have_image_support(CL0) orelse exit(no_image_support),
-	    Dfs = ["-D USE_IMAGE_STORAGE"|Defs0],
+	    Dfs = ["-D USE_IMAGE_STORAGE"|Defs1],
 	    Dev = wings_cl:get_device(CL0),
 	    {ok, MaxH} = cl:get_device_info(Dev, image2d_max_height),
 	    {ok, MaxW} = cl:get_device_info(Dev, image2d_max_width),
@@ -269,18 +275,27 @@ init_accel(CL0, {_BB, Qnodes0, Qtris0, _Map}, Scene) ->
 	catch exit:no_image_support ->
 		QN1 = wings_cl:buff(Qnodes0, CL0),
 		QT1 = wings_cl:buff(Qtris0, CL0),
-		{QN1,QT1,Defs0}
+		{QN1,QT1,Defs1}
 	end,
 
     CL1 = wings_cl:compile("utils/qbvh_kernel.cl", lists:flatten(Defs), CL0),
     Rays = wings_cl:buff(?RAYBUFFER_SZ, CL1),
     Hits = wings_cl:buff(?RAYHIT_SZ*?MAX_RAYS, CL1),
+    
     %%Device  = wings_cl:get_device(CL),
-    %% {ok,Local} = cl:get_kernel_workgroup_info(Kernel, Device, work_group_size),
+    LocalWGS = wings_cl:get_wg_sz('Intersect', CL1),
     %% {ok,Mem} = cl:get_kernel_workgroup_info(Kernel, Device, local_mem_size),
     %% io:format("Scene: WG ~p LMem ~p~n",[Local,Mem]),
-    CL = wings_cl:set_wg_sz('Intersect', 64, CL1),
-    {CL, Scene#scene{isect={QN, QT, Rays, Hits, 64}}}.
+    {CL, WorkMem} = case Local of 
+			true -> 
+			    CL2 = wings_cl:set_wg_sz('Intersect', 64, CL1),
+			    WGSz = 64,
+			    {CL2, {local,24*WGSz*4}};
+			false ->
+			    WorkBuff = wings_cl:buff(24*LocalWGS*4, CL1),
+			    {CL1, WorkBuff}
+		    end,
+    {CL, Scene#scene{isect={QN, QT, Rays, Hits, WorkMem}}}.
 
 i_col(B0,B1,B2, {{V1x,V1y,V1z}, {V2x,V2y,V2z}, {V3x,V3y,V3z}}) 
   when is_float(B0), is_float(B1), is_float(B2),
