@@ -9,6 +9,7 @@
 -module(pbr_pathgpu).
 -export([start/2]).
 
+-include_lib("wings/src/wings.hrl").
 -include("pbr.hrl").
 -include_lib("wings/e3d/e3d.hrl").
 
@@ -196,11 +197,8 @@ rays2bin(Rays) ->
 
 
 update_film(Wait, FB, SceneS, CL) ->
-    io:format("Updates FB~n",[]),
     Scene = pbr_film:set_sample_frame_buffer(FB, SceneS),
-    io:format("Show FB~n",[]),
-    pbr_film:show(Scene),
-    io:format("Got FB~n",[]),
+    ?TC(pbr_film:show(Scene)),
     Scene.
 
 init_render(_Id, Seed, Start, Opts, SceneS0) ->
