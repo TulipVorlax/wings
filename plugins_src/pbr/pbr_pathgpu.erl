@@ -97,7 +97,7 @@ render(SceneS = #renderer{cl=CL},
     {Qn,Qt,LocalMem} = pbr_scene:intersect_data(SceneS),
     IArgs = [RaysB, HitsB, Qn, Qt, ?MAX_RAYS, LocalMem],
     wings_cl:set_args('Intersect', IArgs, CL),
-    render_loop(10, [W0,W1], CL, {StartTime, FB, RI, PS, SceneS}).
+    ?TC(render_loop(10, [W0,W1], CL, {StartTime, FB, RI, PS, SceneS})).
 
 render_loop(N, Wait, CL, Data) when N > 0 ->
     W1 = wings_cl:cast('Sampler', ?TASK_SIZE, Wait, CL),
@@ -109,23 +109,30 @@ render_loop(0, Wait, CL, Data = {StartTime, FB, RI, _PS, SceneS0}) ->
     receive 
 	stop -> 
 	    ok = cl:finish(wings_cl:get_queue(CL)),
-	    update_film(Wait, FB, SceneS0, CL),
+	    update_film(Wait, FB, SceneS0),
 	    normal;
 	Msg ->
 	    io:format("Renderer got Msg ~p~n",[Msg]),
 	    ok = cl:flush(wings_cl:get_queue(CL)),
 	    render_loop(10, Wait, CL, Data)
     after 0 ->
-	    ok = cl:flush(wings_cl:get_queue(CL)),
+	    %%ok = cl:finish(wings_cl:get_queue(CL)),
+	    cl:wait(hd(Wait)),
 	    Elapsed = timer:now_diff(os:timestamp(), StartTime) div 1000,
 	    case Elapsed > RI of
 		true ->
-		    SceneS1 = update_film(Wait, FB, SceneS0, CL),
+		    SceneS1 = update_film(Wait, FB, SceneS0),
 		    render_loop(10, [], CL, {os:timestamp(),FB,RI,_PS,SceneS1});
 		false -> 
 		    render_loop(10, Wait, CL, Data)
 	    end
     end.
+
+update_film(Wait, FB, SceneS) ->
+    ?TC(cl:wait(hd(Wait))),
+    Scene = pbr_film:set_sample_frame_buffer(FB, SceneS),
+    ?TC(pbr_film:show(Scene)),
+    Scene.
 
 -record(task, {seed, sample, pathstate}).
 -record(sample, {rad, 
@@ -195,11 +202,6 @@ rays2bin(Rays) ->
 	  N:?F32,  F:?F32
        >> || #ray{o={OX,OY,OZ},d={DX,DY,DZ},n=N,f=F} <- Rays >>.
 
-
-update_film(Wait, FB, SceneS, CL) ->
-    Scene = pbr_film:set_sample_frame_buffer(FB, SceneS),
-    ?TC(pbr_film:show(Scene)),
-    Scene.
 
 init_render(_Id, Seed, Start, Opts, SceneS0) ->
     PS1 = #ps{},
