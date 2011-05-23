@@ -46,8 +46,8 @@
 	      }).
 
 -define(VERTEX_SZ, (11*4)).
--define(TRIANGLE_SZ, 3*?VERTEX_SZ).
--define(QUAD_SZ, 4*?VERTEX_SZ).
+-define(TRIANGLE_SZ, (3*?VERTEX_SZ)).
+-define(QUAD_SZ, (4*?VERTEX_SZ)).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 init(St = #st{shapes=Shapes,mat=Mtab0}, Opts, R = #renderer{cl=CL0}) ->
@@ -56,7 +56,8 @@ init(St = #st{shapes=Shapes,mat=Mtab0}, Opts, R = #renderer{cl=CL0}) ->
     Mtab    = pbr_mat:init(Mtab0),
     {Size,Data,F2M} = ?TC(prepare_mesh(gb_trees:values(Shapes),Opts,
 				       Mtab,Lights,St,[],[])),    
-    SubDiv = proplists:get_value(subdivisions, Opts, 0),
+    io:format("No of faces ~p ~n", [Size]),
+    SubDiv = 0, %% SubDiv = proplists:get_value(subdivisions, Opts, 0),
     GetTri = make_get_tri_fun(Data, SubDiv),
     GetFace = make_get_face_fun(Data, F2M, SubDiv),
     AccelBin = {WBB,_,_,_} = ?TC(e3d_qbvh:init([{Size,GetTri}])),
@@ -66,7 +67,6 @@ init(St = #st{shapes=Shapes,mat=Mtab0}, Opts, R = #renderer{cl=CL0}) ->
 		    world_bb=WBB, data=Data, no_fs=Size, fsmap=F2M,
 		    qbvh=AccelBin, type=Type},
     {CL, Scene} = init_accel(CL0, AccelBin, Scene0),
-    io:format("No of faces ~p => no verts ~p~n", [Size, Size*3]),
     R#renderer{cl=CL, scene=Scene}.
 
 make_get_tri_fun(Data, 0) -> 
@@ -308,7 +308,8 @@ prepare_mesh([We = #we{name=_Name}|Wes], Opts, Mtab, Ls, St, AccData, MatList)
 	    %% Change Normals
 	    Data = swap_normals(Vs, Ns, <<>>),
 	    MM = lists:reverse(lists:keysort(3, MatMap)),
-	    Mats = fix_matmap(MM, false, SubDiv == 0, Mtab, []), %% This should be a tree?
+	    Mats = fix_matmap(MM, false, true, %% SubDiv == 0, 
+			      Mtab, []), %% This should be a tree?
 	    prepare_mesh(Wes, Opts, Mtab, Ls, St, [Data|AccData], [Mats|MatList])
     catch _:badmatch ->
 	    erlang:error({?MODULE, vab_internal_format_changed})
@@ -319,9 +320,10 @@ prepare_mesh([], Opts, _, _, _, AccData, MatList) ->
     Bin = list_to_binary(AccData),
     FaceSz = case proplists:get_value(subdivisions, Opts, 0) of
 		 0 -> ?TRIANGLE_SZ;
-		 _N -> ?QUAD_SZ
+		 _N -> 2*?TRIANGLE_SZ
 	     end,
-    {byte_size(Bin) div FaceSz, Bin, array:from_list(lists:append(MatList))}.
+    {byte_size(Bin) div ?TRIANGLE_SZ, %% FaceSz
+     Bin, array:from_list(lists:append(MatList))}.
     						       
 swap_normals(<<Vs:12/binary, _:12/binary, ColUv:20/binary, NextVs/binary>>, 
 	     <<Ns:12/binary, NextNs/binary>>, Acc) ->
