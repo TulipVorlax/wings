@@ -72,21 +72,22 @@ init_light(spot, L, WBB) ->
     new({point, Pos, {IR*I,IG*I,IB*I}}, WBB);
 init_light(infinite, L, WBB) ->
     {Dx,Dy,Dz,_} = proplists:get_value(diffuse, L),
+    I = 1.0,
+    Diff = {Dx*I,Dy*I,Dz*I},
     Pos  = proplists:get_value(position, L),
     Aim  = proplists:get_value(aim_point, L),
     Pbr  = proplists:get_value(pbr, L, []),
     Turb = proplists:get_value(turbulance, Pbr, 2.2),
     Size = proplists:get_value(size, Pbr, 5.5),
     Vec = e3d_vec:norm(e3d_vec:sub(Pos,Aim)),
-    Sun = new({sunlight, Vec, Turb, {Dx,Dy,Dz}, Size}, WBB),
-    Sky = new({skylight, Vec, Turb, {Dx,Dy,Dz}}, WBB),
+    Sun = new({sunlight, Vec, Turb, Diff, Size}, WBB),
+    Sky = new({skylight, Vec, Turb, Diff}, WBB),
     #sunskylight{sun=Sun,sky=Sky};
 
 init_light(ambient, L, WBB) ->
     new({skylight, L}, WBB);
 init_light(area, L, WBB) ->
     new({arealight, L}, WBB).
-
 
 get_light(Id, Ls) ->
     array:get(Id, Ls). 
