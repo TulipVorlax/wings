@@ -75,11 +75,9 @@ start(Attrs, SceneS0) ->
       sampler        = get_sampler(Attrs),
       filter         = get_filter(Attrs),
       lens_r         = (proplists:get_value(aperture, Attrs, 0.0) / 2.0),
-      refresh        = (proplists:get_value(refresh_interval, Attrs, 5)) * 1000
+      refresh        = (proplists:get_value(refresh_interval, Attrs, 1)) * 1000
      },
-    Res = start_processes(ROpt, SceneS),
-    io:format("Rendering done ~n",[]),
-    Res.
+    start_processes(ROpt, SceneS).
 
 start_processes(Ropt, SceneS0) ->
     %% NoThreads = erlang:system_info(schedulers),
@@ -90,48 +88,55 @@ start_processes(Ropt, SceneS0) ->
 render(SceneS = #renderer{cl=CL}, 
        PS=#ps{sample_fb=FB, rays=RaysB, hits=HitsB}, 
        #ropt{refresh=RI}, IAs) ->
+    io:format("Starting rendering~n",[]),
     {X,Y} = pbr_film:resolution(SceneS),
+    Start = os:timestamp(),
     W0 = wings_cl:cast('InitFrameBuffer', [FB], X*Y, [], CL),
     W1 = wings_cl:cast('Init', IAs, ?TASK_SIZE, [], CL),
-    StartTime = os:timestamp(),
     {Qn,Qt,LocalMem} = pbr_scene:intersect_data(SceneS),
     IArgs = [RaysB, HitsB, Qn, Qt, ?MAX_RAYS, LocalMem],
     wings_cl:set_args('Intersect', IArgs, CL),
-    ?TC(render_loop(10, [W0,W1], CL, {StartTime, FB, RI, PS, SceneS})).
+    Res = render_loop(10, 0, [W0,W1], CL, {Start, FB, RI, PS, SceneS}),
+    Stop = os:timestamp(),
+    io:format("Rendered in: ~s #rays:  ~p~n",
+	      [format_time(timer:now_diff(Stop,Start)),
+	       Res*?TASK_SIZE]),
+    normal.
 
-render_loop(N, Wait, CL, Data) when N > 0 ->
+render_loop(N, C, Wait, CL, Data) when N > 0 ->
     W1 = wings_cl:cast('Sampler', ?TASK_SIZE, Wait, CL),
     W2 = wings_cl:cast('Intersect', ?TASK_SIZE, [W1], CL),
-    %% debug_rays(Data, [W2], CL),
     W3 = wings_cl:cast('AdvancePaths', ?TASK_SIZE, [W2], CL),
-    render_loop(N-1, [W3], CL, Data);
-render_loop(0, Wait, CL, Data = {StartTime, FB, RI, _PS, SceneS0}) ->
+    render_loop(N-1, C, [W3], CL, Data);
+render_loop(0, C0, Wait, CL, Data = {StartTime, FB, RI, _PS, SceneS0}) ->
+    Count = C0+10,
     receive 
 	stop -> 
 	    ok = cl:finish(wings_cl:get_queue(CL)),
 	    update_film(Wait, FB, SceneS0),
-	    normal;
+	    Count;
 	Msg ->
 	    io:format("Renderer got Msg ~p~n",[Msg]),
 	    ok = cl:flush(wings_cl:get_queue(CL)),
-	    render_loop(10, Wait, CL, Data)
+	    render_loop(10, Count, Wait, CL, Data)
     after 0 ->
-	    %%ok = cl:finish(wings_cl:get_queue(CL)),
 	    cl:wait(hd(Wait)),
 	    Elapsed = timer:now_diff(os:timestamp(), StartTime) div 1000,
 	    case Elapsed > RI of
 		true ->
 		    SceneS1 = update_film(Wait, FB, SceneS0),
-		    render_loop(10, [], CL, {os:timestamp(),FB,RI,_PS,SceneS1});
-		false -> 
-		    render_loop(10, Wait, CL, Data)
+		    render_loop(10, Count, [], CL, {os:timestamp(),FB,RI+500,_PS,SceneS1});
+		false -> 		    
+		    render_loop(10, Count, Wait, CL, Data)
 	    end
     end.
 
 update_film(Wait, FB, SceneS) ->
-    ?TC(cl:wait(hd(Wait))),
+    %% erlang:display(?LINE),
+    cl:wait(hd(Wait)),
     Scene = pbr_film:set_sample_frame_buffer(FB, SceneS),
-    ?TC(pbr_film:show(Scene)),
+    pbr_film:show(Scene),
+    %% erlang:display(?LINE),
     Scene.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -193,14 +198,18 @@ create_scene_buffs(PS, {Face2Mesh, Mesh2Mat, Mats}, SceneS = #renderer{cl=CL}) -
 create_light_buffs(PS0, SceneS = #renderer{cl=CL}) ->    
     %% Lights
     Lights = pbr_scene:get_lights(SceneS),
-    %% AreaLight = StatBuff(pbr_light:pack_area(SceneS)),
-    PS = PS0#ps{arealightn  = 0,      %% Fixme
-		arealight   = false,  %% Fixme
+    {ALN, AreaLight} = pbr_light:pack_arealights(Lights),
+    PS = PS0#ps{arealightn  = ALN,
+		arealight   = opt_buff(AreaLight,CL), 
 		inflight    = false,
 		inflightmap = false,
-		sunlight = opt_buff(pbr_light:pack_light(sunlight,Lights),CL),
-		skylight  = opt_buff(pbr_light:pack_light(skylight,Lights),CL)},
-    PS#ps.sunlight /= false orelse PS#ps.skylight /= false orelse exit(no_light),
+		sunlight    = opt_buff(pbr_light:pack_light(sunlight,Lights),CL),
+		skylight    = opt_buff(pbr_light:pack_light(skylight,Lights),CL)},
+    %% Assert there is some lights
+    PS#ps.sunlight /= false orelse PS#ps.skylight /= false orelse 
+	PS#ps.arealight /= false orelse PS#ps.inflightmap /= false
+	orelse exit(no_light),
+    ALN > 0 andalso io:format("Area lights: ~p (~pb)~n", [ALN, byte_size(AreaLight)]),
     PS.
 
 create_tex_buffs(PS, _SceneS) ->
@@ -497,6 +506,19 @@ get_filter(mitchell, Attrs) ->
     B = proplists:get_value(filter_b, Attrs, 1/3),
     C = proplists:get_value(filter_c, Attrs, 1/3),
     #filter{type=mitchell, dim=Dim, opts=[{b,B},{c,C}]}.
+
+format_time(Micro) ->
+    Units = [{"us", 1000},{"ms", 1000},{"sec", 60}, {"min", 60}, {"hour", 1000}],
+    format_time(Micro, [], Units).
+
+format_time(T, Acc, [{Unit,Len}|Units]) when T > 0 ->
+    Str = io_lib:format("~p~s ",[T rem Len, Unit]),
+    format_time(T div Len, [Str|Acc], Units);
+format_time(_, [Acc1,Acc2,_,_|_], _) ->
+    [Acc1,Acc2];
+format_time(_, [Acc1|_], _) ->
+    [Acc1];
+format_time(_, [], _) -> "0ms".
 
 
 %%%%%%%%%%% Debug

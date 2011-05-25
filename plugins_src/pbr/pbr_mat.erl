@@ -9,7 +9,7 @@
 -module(pbr_mat).
 
 -export([snew/0, sdiv/2, smul/2, sadd/2, sY/1, s_is_black/1, to_rgb/1,
-	 init/1, pack_materials/1, type/1,
+	 init/1, pack_materials/1, type/1, create_arealight_mat/3,
 	 sample_f/4, f/4, lookup/3, is_light/1, is_diffuse/1]).
 
 -export([spd/3, irregular_spd/2,irregular_spd/3,
@@ -112,7 +112,7 @@ to_rgb(Spectrum) ->
 	 m_info,				% Term module specific
 	 maps
 	}).
--record(arealight,  {}).
+-record(arealight,  {gain}).
 -record(matte,  {kd, kdOverPi}).
 -record(mirror, {kr, sb=1}).
 -record(mattemirror, {kd, kr, sb=1, mattef, totf, mattepdf, mirrorpdf}).
@@ -136,6 +136,10 @@ create_mat(WM) ->
 	1.0 -> create_solid_mat({R,G,B}, OpenGL, Maps);
 	_ -> create_glass_mat(A, {R,G,B}, OpenGL, Maps)
     end.
+
+create_arealight_mat(Name, Gain, Mtab) ->
+    AreaL = #material{label=Name, m_info=#arealight{gain=Gain}},
+    gb_trees:insert(Name, AreaL, Mtab).
 
 create_solid_mat(Diff, OpenGL, Maps) ->
     Shine    = proplists:get_value(shininess, OpenGL),
@@ -206,8 +210,10 @@ pack_material(#matte{kd={R,G,B}}, Bin) ->
     <<Bin/binary, ?MAT_MATTE:?UI32, 
       R:?F32, G:?F32, B:?F32, 
       0:(8*(?MAT_MAX_SZ-?MAT_MATTE_SZ))>>;
-pack_material(#arealight{}, Bin) -> 
-    exit(nyi);
+pack_material(#arealight{gain={R,G,B}}, Bin) -> 
+    <<Bin/binary, ?MAT_AREALIGHT:?UI32, 
+      R:?F32, G:?F32, B:?F32, 
+      0:(8*(?MAT_MAX_SZ-?MAT_AREALIGHT_SZ))>>;
 pack_material(#mirror{kr={R,G,B}, sb=SB}, Bin) -> 
     <<Bin/binary, ?MAT_MIRROR:?UI32, 
       R:?F32, G:?F32, B:?F32, SB:?I32,
