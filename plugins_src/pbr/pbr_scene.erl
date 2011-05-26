@@ -15,6 +15,7 @@
 -export([init/3,
 	 intersect/2, intersect_data/1,	 
 	 get_lights/1,
+	 get_materials/1,
 	 get_infinite_light/1,
 	 get_face_info/6,
 	 vertices/1,
@@ -36,6 +37,7 @@
 	 data,
 	 type, 
 	 fsmap,
+	 mats,
 	 qbvh
 	}).
 
@@ -55,8 +57,8 @@ init(St = #st{shapes=Shapes,mat=Mtab0}, Opts, R = #renderer{cl=CL0}) ->
     Lights0 = proplists:get_value(lights, Opts),
     Lights  = pbr_light:init(Lights0),
     Mtab    = pbr_mat:init(Mtab0),
-    Scene0  = #scene{lights=Lights},
-    Scene1  = ?TC(prepare_mesh(gb_trees:values(Shapes),Opts,Mtab,St,Scene0,[],[])),
+    Scene0  = #scene{lights=Lights, mats=Mtab},
+    Scene1  = ?TC(prepare_mesh(gb_trees:values(Shapes),Opts,St,Scene0,[],[])),
     GetTri  = make_get_tri_fun(Scene1),
     GetFace = make_get_face_fun(Scene1),
     #scene{no_fs=Size} = Scene1,
@@ -205,13 +207,14 @@ uvs(#renderer{scene=#scene{data=Data}}) ->
     << <<U1:?F32, V1:?F32>> || 
 	<<_V1x:?F32, _V1y:?F32, _V1z:?F32,
 	  _N1x:?F32, _N1y:?F32, _N1z:?F32,
+	  _V1r:?F32, _V1g:?F32, _V1b:?F32,
 	  U1:?F32, V1:?F32 >> <= Data >>.
 
 vertex_colors(#renderer{scene=#scene{data=Data}}) ->
-    << <<V1r:?F32, V1g:?F32, V1b:?F32>> || 
+    << <<V1r:?F32, V1g:?F32, V1b:?F32>> ||
 	<<_V1x:?F32, _V1y:?F32, _V1z:?F32,
 	  _N1x:?F32, _N1y:?F32, _N1z:?F32,
-	  V1r:?F32, V1g:?F32, V1b:?F32,	  
+	  V1r:?F32, V1g:?F32, V1b:?F32,
 	  _U1:?F32, _V1:?F32 >> <= Data >>.
 
 %% Returns used {<<Face2MeshId:?UI32>>, <<MeshId2MatId:?UI32>>, [Mats]}
@@ -233,7 +236,7 @@ mesh2mat(#renderer{scene=#scene{fsmap=FsMap}}) ->
 		       end
 	       end,
     {_, MatsT, OrderdMats} = lists:foldl(MatOrder, {0, gb_trees:empty(), []}, Mats),
-    Mesh2Mat = << <<(gb_trees:get(MatId, MatsT)):?UI32>> || MatId <- Mats >>,
+    Mesh2Mat = [ gb_trees:get(MatId, MatsT) || MatId <- Mats ],
     {Face2Mesh, Mesh2Mat, lists:reverse(OrderdMats)}.
 
 %% Returns world bounding box
@@ -246,6 +249,9 @@ get_lights(#renderer{scene=#scene{lights=Ls}}) ->
 
 get_infinite_light(#renderer{scene=#scene{lights=Ls}}) ->
     pbr_light:get_infinite_light(Ls).
+
+get_materials(#renderer{scene=#scene{mats=Ms}}) ->
+    Ms.
 
 %% Given Rayhit info return face info:
 %%  {HitPoint, Material, SurfaceColor, Normal, ShadingNormal} 
@@ -262,7 +268,7 @@ get_face_info(#ray{o=RayO,d=RayD},T,B1,B2,FId,
 	    N = e3d_vec:normal(Vs),
 	    ShadeN0 = i_norm(B0,B1,B2,Ns),
 	    UV = i_uv(B0,B1,B2,UVs),
-	    case pbr_mat:lookup(Mat, UV, texture) of
+	    case pbr_mat:lookup_texture(Mat, UV, texture) of
 		false -> 
 		    ShadeN = check_normal_bumpmap(ShadeN0, Mat, UV),
 		    {Point, Mat, SC0, N, ShadeN};
@@ -294,7 +300,7 @@ intersect_data(#renderer{scene=Scene}) ->
     {Qnodes, Qpoints, WorkBuff}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-prepare_mesh([We|Wes], Opts, Mtab, St, S, AccData, MatList)
+prepare_mesh([We|Wes], Opts, St, S, AccData, MatList)
   when ?IS_VISIBLE(We#we.perm), (not ?IS_ANY_LIGHT(We)) ->
     SubDiv = proplists:get_value(subdivisions, Opts, 0),
     Options = [{smooth, true}, {subdiv, SubDiv},
@@ -307,13 +313,13 @@ prepare_mesh([We|Wes], Opts, Mtab, St, S, AccData, MatList)
 	    Data = swap_normals(Vs, Ns, <<>>),
 	    MM = lists:reverse(lists:keysort(3, MatMap)),
 	    Type = get_face_type(MatMap, S),
-	    Mats = fix_matmap(MM, Type, Mtab, []), %% This should be a tree?
-	    prepare_mesh(Wes, Opts, Mtab, St, S#scene{type=Type}, 
+	    Mats = fix_matmap(MM, Type, S#scene.mats, []), %% This should be a tree?
+	    prepare_mesh(Wes, Opts, St, S#scene{type=Type}, 
 			 [Data|AccData], [Mats|MatList])
     catch _:badmatch ->
 	    erlang:error({?MODULE, vab_internal_format_changed})
     end;
-prepare_mesh([We = #we{name=Name}|Wes], Opts, Mtab0, St, S, AccData, MatList)
+prepare_mesh([We = #we{name=Name}|Wes], Opts, St, S, AccData, MatList)
   when ?IS_VISIBLE(We#we.perm), ?IS_AREA_LIGHT(We) ->
     SubDiv = proplists:get_value(subdivisions, Opts, 0),
     Options = [{attribs, color_uv}, {subdiv, SubDiv}, {vmirror, freeze}],
@@ -329,17 +335,17 @@ prepare_mesh([We = #we{name=Name}|Wes], Opts, Mtab0, St, S, AccData, MatList)
 			quads -> byte_size(Vs) div ?QUAD_SZ
 		    end,
 	    {Ls,Gain} = pbr_light:init_arealight(Name, Ntris, GetTri, S#scene.lights),
-	    Mtab = pbr_mat:create_arealight_mat(AreaLMat, Gain, Mtab0),
+	    Mtab = pbr_mat:create_arealight_mat(AreaLMat, Gain, S#scene.mats),
 	    MatMap = [{AreaLMat, ?GL_TRIANGLES, 0, byte_size(Vs) div ?VERTEX_SZ}],
 	    Mats = fix_matmap(MatMap, Type, Mtab, []), 
-	    prepare_mesh(Wes, Opts, Mtab, St, S#scene{lights=Ls, type=Type}, 
+	    prepare_mesh(Wes, Opts, St, S#scene{lights=Ls, type=Type, mats=Mtab}, 
 			 [Vs|AccData], [Mats|MatList])
     catch _:badmatch ->
 	    erlang:error({?MODULE, vab_internal_format_changed})
     end;
-prepare_mesh([_|Wes], Opts, Mtab, St, T, AccData, MatList) ->
-    prepare_mesh(Wes, Opts, Mtab, St, T, AccData, MatList);
-prepare_mesh([], _, _, _, S = #scene{type=Type}, AccData, MatList) ->
+prepare_mesh([_|Wes], Opts, St, T, AccData, MatList) ->
+    prepare_mesh(Wes, Opts, St, T, AccData, MatList);
+prepare_mesh([], _, _, S = #scene{type=Type}, AccData, MatList) ->
     Bin = list_to_binary(AccData),
     FaceSz = if Type =:= tris ->?TRIANGLE_SZ; true -> ?QUAD_SZ end,
     S#scene{no_fs=byte_size(Bin) div FaceSz, 
@@ -363,7 +369,7 @@ get_face_type(MatMap, #scene{type=Old}) ->
     end.
 
 fix_matmap([_MI={Name, _, _Start, Count}|Mats], tris, Mtab, Acc0) ->
-    Mat = gb_trees:get(Name, Mtab),
+    Mat = pbr_mat:lookup_id(Name, Mtab),
     Acc = append_color(Count div 3, Mat, Acc0),
     fix_matmap(Mats, tris, Mtab, Acc);
 fix_matmap([_MI={Name, _, _Start, Count}|Mats], quads, Mtab, Acc0) ->
@@ -452,9 +458,9 @@ i_uv(B0,B1,B2, {{V1x,V1y}, {V2x,V2y}, {V3x,V3y}})
      B0*V1y + B1*V2y + B2*V3y}.
 
 check_normal_bumpmap(Normal = {NX,NY,NZ}, Mat, UV) ->
-    case pbr_mat:lookup(Mat, UV, normal) of
+    case pbr_mat:lookup_texture(Mat, UV, normal) of
 	false -> 
-	    case pbr_mat:lookup(Mat, UV, bump) of
+	    case pbr_mat:lookup_texture(Mat, UV, bump) of
 		false -> Normal;
 		_Color ->
 		    %% const UV &dudv = map->GetDuDv();
