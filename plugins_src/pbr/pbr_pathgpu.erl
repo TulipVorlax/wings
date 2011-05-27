@@ -147,15 +147,15 @@ update_film(Wait, FB, SceneS) ->
 init_render(_Id, Seed, Start, Opts, SceneS0) ->
     PS1 = #ps{},
     io:format("Creating data~n",[]),
-    MeshBuffs = {_, _, Materials} = pbr_scene:mesh2mat(SceneS0),
-    PS2 = create_scene_buffs(PS1, MeshBuffs, SceneS0),
+    MeshMatBuffs = pbr_scene:mesh2mat(SceneS0),
+    PS2 = create_scene_buffs(PS1, MeshMatBuffs, SceneS0),
     PS3 = create_light_buffs(PS2, SceneS0),
-    PS4 = create_tex_buffs(PS3, Materials, SceneS0),
+    PS4 = create_tex_buffs(PS3, MeshMatBuffs, SceneS0),
     CamBin = pbr_camera:pack_camera(Opts#ropt.lens_r, SceneS0), 
     PS5 = PS4#ps{cam=wings_cl:buff(CamBin, SceneS0#renderer.cl)},
     PS  = create_work_buffs(PS5, calc_task_size(PS5, Opts), SceneS0), 
     io:format("Compiling OpenCL code~n",[]),
-    CompilerParams = create_params(Seed, Start, Materials, Opts, PS, SceneS0),
+    CompilerParams = create_params(Seed, Start, MeshMatBuffs, Opts, PS, SceneS0),
     SceneS = ?TC(compile(SceneS0, CompilerParams, Opts, PS)),
     SamplerArgs = sampler_args(PS, Opts, SceneS),
     AdvancePathsArgs = advance_paths_args(PS), 
@@ -175,16 +175,15 @@ create_work_buffs(PS, TaskSize, SceneS = #renderer{cl=CL}) ->
 	  task        = wings_cl:buff(TaskSize*?TASK_SIZE,CL),
 	  taskstats   = wings_cl:buff(?TASKSTAT_SZ * ?TASK_SIZE,CL)}.
 
-create_scene_buffs(PS, {Face2Mesh, Mesh2Mat, Mats}, SceneS = #renderer{cl=CL}) ->
+create_scene_buffs(PS, {Face2Mesh, Mesh2Mat, _, Mats}, SceneS = #renderer{cl=CL}) ->
     %% Static Scene buffers
     MatBuff = pbr_mat:pack_materials(Mats, pbr_scene:get_materials(SceneS)),
     VCs = pbr_scene:vertex_colors(SceneS),
     Ns  = pbr_scene:normals(SceneS),
     Ts  = pbr_scene:triangles(SceneS),
     Vs  = pbr_scene:vertices(SceneS),
-    Mesh2MatBin = << <<Mat:?UI32>> || Mat <- Mesh2Mat >>,
     io:format("Materials   ~w ~wb~n", [size(MatBuff) div 52, size(MatBuff) ]),
-    io:format("Mesh2Mat    ~w ~wb~n", [size(Mesh2MatBin) div 4, size(Mesh2MatBin)]),
+    io:format("Mesh2Mat    ~w ~wb~n", [size(Mesh2Mat) div 4, size(Mesh2Mat)]),
     io:format("Meshids F2M ~w ~wb~n", [size(Face2Mesh) div 4, size(Face2Mesh)]),
     io:format("color       ~w ~wb~n", [size(VCs) div 36, size(VCs)]),
     io:format("normals     ~w ~wb~n", [size(Ns)  div 36, size(Ns)]),
@@ -192,7 +191,7 @@ create_scene_buffs(PS, {Face2Mesh, Mesh2Mat, Mats}, SceneS = #renderer{cl=CL}) -
     io:format("triangles   ~w ~wb~n", [size(Ts)  div 12, size(Ts)]),
     
     PS#ps{meshids   = wings_cl:buff(Face2Mesh, CL),
-	  mesh2mat  = wings_cl:buff(Mesh2MatBin, CL),
+	  mesh2mat  = wings_cl:buff(Mesh2Mat, CL),
 	  mats      = wings_cl:buff(MatBuff, CL),
 	  colors    = wings_cl:buff(VCs, CL),
 	  normals   = wings_cl:buff(Ns, CL),
@@ -217,9 +216,10 @@ create_light_buffs(PS0, SceneS = #renderer{cl=CL}) ->
 			      [ALN, byte_size(AreaLight)]),
     PS.
 
-create_tex_buffs(PS, Mats, SceneS = #renderer{cl=CL}) ->
+create_tex_buffs(PS, {_, _, Mesh2Mat, _}, SceneS = #renderer{cl=CL}) ->
+    %% io:format("Mats ~w~n",[Mesh2Mat]),
     Materials = pbr_scene:get_materials(SceneS),
-    case pbr_mat:mesh2tex(Mats, Materials) of
+    case pbr_mat:mesh2tex(Mesh2Mat, Materials) of
 	{_, _, _, []} -> PS;
 	{M2Tex, M2Bumps, M2BScale, Textures} ->
 	    {TexRGB, TexAlpha, TexDesc} = pbr_mat:pack_textures(Textures),
@@ -237,7 +237,7 @@ opt_buff(Buff, CL) when is_binary(Buff) ->
 opt_buff(_, _) -> 
     false.
 
-create_params(Seed, Start, Materials, Opt, PS, SceneS) ->
+create_params(Seed, Start, {_,_,_,Materials}, Opt, PS, SceneS) ->
     {X,Y} = pbr_film:resolution(SceneS),
     StartLine = trunc(Start*Y),
     Ps = [param("PARAM_STARTLINE", StartLine),

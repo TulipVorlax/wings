@@ -59,7 +59,7 @@
 -record(mattemirror, {kd, kr, sb=1, mattef, totf, mattepdf, mirrorpdf}).
 -record(metal,  {kr, exp, sb=1}).
 -record(mattemetal,  {kd, kr, exp, sb=1, mattef, totf, mattepdf, metalpdf}).
--record(alloy,  {kd, kr, exp, r0, sb=1}).
+-record(alloy,  {kd, kr, exp, r0=0.5, sb=1}).
 -record(glass,  {refl, refr, ior, oior, r0, rsb=1, tsb=1}).
 -record(archglass,  {refl, refr, rsb=1, tsb=1, reflf, totf, reflpdf, transpdf}).
 
@@ -152,7 +152,7 @@ create_solid_mat(Diff, {0.0,0.0,0.0}, 0.0) ->
     create_diffuse(Diff);
 create_solid_mat(Diff, Spec, Shin) 
   when Shin < 0.5 ->
-    Exp = 1.0-Shin,
+    Exp = 1.000001-Shin,
     MaF = filter(Diff),
     MiF = filter(Spec),
     TF  = MaF + MiF,
@@ -162,10 +162,10 @@ create_solid_mat(Diff, Spec, Shin)
 		mattef=MaF, totf=TF, 
 		mattepdf = MaPdf, metalpdf = MiPdf};
 create_solid_mat({1.0,1.0,1.0}, Spec, Shin) ->
-    Exp = 1.0-Shin,
+    Exp = 1.000001-Shin,
     #metal{kr=Spec, exp=Exp};
-create_solid_mat(Diff, Spec, Shin) when Shin < 0.5 ->
-    Exp = 1.0-Shin,
+create_solid_mat(Diff, Spec, Shin) ->
+    Exp = 1.000001-Shin,
     #alloy{kd=Diff, kr=Spec, exp=Exp}.
 
 create_mirror({1.0,1.0,1.0}, Spec) ->
@@ -200,7 +200,7 @@ type(Mat, #ms{mats=Mats}) ->
 %%%%%%%%%
 
 mesh2tex(Mats, #ms{mats=Ms}) ->
-    mesh2tex(Mats, Ms, 0, [], [], [], false, false).
+    mesh2tex(Mats, Ms, 0, [], [], array:new(), false, false).
 
 pack_textures(TexIds) ->
     pack_textures(TexIds, {<<>>, <<>>}, <<>>).
@@ -244,6 +244,7 @@ pack_material(#metal{kr={R,G,B}, exp=Exp, sb=SB}, Bin) ->
     <<Bin/binary, ?MAT_METAL:?UI32, 
       R:?F32, G:?F32, B:?F32, Exp:?F32, SB:?F32,
       0:(8*(?MAT_MAX_SZ-?MAT_METAL_SZ))>>;
+
 pack_material(#mattemetal{kd={DR,DG,DB}, kr={RR,RG,RB}, exp=Exp, sb=SB,
 			  mattef=MaF, totf=TF, mattepdf=MaPdf, metalpdf=MiPdf
 			 }, Bin) -> 
@@ -261,7 +262,7 @@ pack_material(#alloy{kd={DR,DG,DB}, kr={RR,RG,RB}, exp=Exp, r0=R0, sb=SB}, Bin) 
 pack_material(#archglass{refl={DR,DG,DB}, refr={RR,RG,RB}, rsb=RSB, tsb=TSB,
 			 reflf=MaF, totf=TF, reflpdf=MaPdf, transpdf=MiPdf
 			}, Bin) -> 
-    <<Bin/binary, ?MAT_ALLOY:?UI32, 
+    <<Bin/binary, ?MAT_ARCHGLASS:?UI32, 
       DR:?F32, DG:?F32, DB:?F32, 
       RR:?F32, RG:?F32, RB:?F32, 
       MaF:?F32, TF:?F32, MaPdf:?F32, MiPdf:?F32, 
@@ -271,28 +272,44 @@ pack_material(Mat, Bin) ->
     io:format("Ignoring unknown material ~p~n", [Mat]),
     Bin.
 
-mesh2tex([Mat|Mats], Ms, Id, Tex, Bump, All, HaveTex, HaveBump) ->
+mesh2tex([Mat|Mats], Ms, N0, Tex, Bump, All0, HaveTex, HaveBump) ->
     No = 16#ffffffff,
     case array:get(Mat,Ms) of
 	#material{map=undefined, bump=undefined} ->
-	    mesh2tex(Mats, Ms, Id, [No|Tex], [No|Bump], 
-		     All, HaveTex, HaveBump);
+	    mesh2tex(Mats, Ms, N0, [No|Tex], [No|Bump], 
+		     All0, HaveTex, HaveBump);
 	#material{map=TId, bump=undefined} ->
-	    mesh2tex(Mats, Ms, Id+1, [Id|Tex], [No|Bump], 
-		     [TId|All], true, HaveBump);
+	    {Id, N, All} = texId(TId, N0, All0),
+	    mesh2tex(Mats, Ms, N, [Id|Tex], [No|Bump], 
+		     All, true, HaveBump);
 	#material{map=undefined, bump=TId} ->
-	    mesh2tex(Mats, Ms, Id+1, [No|Tex], [Id|Bump], 
-		     [TId|All], HaveTex, true);
-	#material{map=MId, bump=BId} ->
-	    mesh2tex(Mats, Ms, Id+2, [Id|Tex], [Id+1|Bump], 
-		     [BId,MId|All], true, true)
+	    {Id, N, All} = texId(TId, N0, All0),
+	    mesh2tex(Mats, Ms, N, [No|Tex], [Id|Bump],
+		     All, HaveTex, true);
+	#material{map=MId0, bump=BId0} ->
+	    {MId, N1, All1} = texId(MId0, N0, All0),
+	    {BId, N, All} = texId(BId0, N1, All1),
+	    mesh2tex(Mats, Ms, N, [MId|Tex], [BId|Bump], 
+		     All, true, true)
     end;
-mesh2tex([], _, _, Texs, Bumps, All, HaveTex, HaveBump) -> 
-    BumpScales = [ 1.0 || _ <- Bumps],
+mesh2tex([], _, _, Texs, Bumps, All0, HaveTex, HaveBump) -> 
+    BumpScales = HaveBump andalso << <<1.0:?F32>> || _ <- Bumps >>,
+    All = [Orig || {Orig,_} <- lists:keysort(2, array:sparse_to_orddict(All0))],
+    %% io:format("Mesh2Tex ~p: ~w~n~w~n", [HaveTex, Texs,All]),
+    %% io:format("Bumps ~p: ~w~n~w~n", [HaveBump, Bumps, BumpScales]),
     {mesh2texbin(HaveTex, Texs),
      mesh2texbin(HaveBump, Bumps),
-     mesh2texbin(HaveBump, BumpScales),
-     lists:reverse(All)}.
+     BumpScales,
+     All}.
+
+texId(Id, Next, Texs0) ->
+    case array:get(Id, Texs0) of
+	undefined ->
+	    Texs = array:set(Id, Next, Texs0),
+	    {Next, Next+1, Texs};
+	Tex ->
+	    {Tex, Next, Texs0}
+    end.
 
 mesh2texbin(false, _) -> false;
 mesh2texbin(true, IntList) -> 
@@ -302,6 +319,7 @@ pack_textures([Id|TexIds], Ts={RGB0, A0}, Desc0) ->
     #e3d_image{width=W,height=H,type=Bpp,image=Bin} = wings_image:info(Id),
     APos = alpha_offset(Bpp, A0),
     Pos  = rgb_offset(RGB0),
+    %% io:format("Tex ~p Offset: ~p,~p ~p ~n", [Id, Pos,APos, {W,H}]),
     Desc = <<Desc0/binary, Pos:?UI32, APos:?UI32, W:?UI32, H:?UI32>>,
     pack_textures(TexIds, pack_texture(Bpp,Bin,Ts), Desc);
 pack_textures([], {RGB,A}, Desc) ->

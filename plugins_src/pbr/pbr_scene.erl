@@ -236,8 +236,8 @@ mesh2mat(#renderer{scene=#scene{fsmap=FsMap}}) ->
 		       end
 	       end,
     {_, MatsT, OrderdMats} = lists:foldl(MatOrder, {0, gb_trees:empty(), []}, Mats),
-    Mesh2Mat = [ gb_trees:get(MatId, MatsT) || MatId <- Mats ],
-    {Face2Mesh, Mesh2Mat, lists:reverse(OrderdMats)}.
+    Mesh2Mat = << << (gb_trees:get(MatId, MatsT)):?UI32 >> || MatId <- Mats >>,
+    {Face2Mesh, Mesh2Mat, Mats, lists:reverse(OrderdMats)}.
 
 %% Returns world bounding box
 bb(#renderer{scene=#scene{world_bb=WBB}}) ->
@@ -417,7 +417,7 @@ init_accel(CL0, {_BB, Qnodes0, Qtris0, _Map}, Scene) ->
     Hits = wings_cl:buff(?RAYHIT_SZ*?MAX_RAYS, CL1),
     
     %%Device  = wings_cl:get_device(CL),
-    LocalWGS = wings_cl:get_wg_sz('Intersect', CL1),
+    %%LocalWGS = wings_cl:get_wg_sz('Intersect', CL1),
     %% {ok,Mem} = cl:get_kernel_workgroup_info(Kernel, Device, local_mem_size),
     %% io:format("Scene: WG ~p LMem ~p~n",[Local,Mem]),
     {CL, WorkMem} = case Local of 
