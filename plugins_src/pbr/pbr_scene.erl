@@ -422,11 +422,11 @@ init_accel(CL0, {_BB, Qnodes0, Qtris0, _Map}, Scene) ->
     %% io:format("Scene: WG ~p LMem ~p~n",[Local,Mem]),
     {CL, WorkMem} = case Local of 
 			true -> 
-			    CL2 = wings_cl:set_wg_sz('Intersect', 64, CL1),
 			    WGSz = 64,
+			    CL2 = wings_cl:set_wg_sz('Intersect', WGSz, CL1),
 			    {CL2, {local,24*WGSz*4}};
 			false ->
-			    WorkBuff = wings_cl:buff(24*LocalWGS*4, CL1),
+			    WorkBuff = wings_cl:buff(24*?MAX_RAYS*4, CL1),
 			    {CL1, WorkBuff}
 		    end,
     {CL, Scene#scene{isect={QN, QT, Rays, Hits, WorkMem}}}.

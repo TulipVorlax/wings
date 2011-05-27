@@ -88,19 +88,21 @@ start_processes(Ropt, SceneS0) ->
 render(SceneS = #renderer{cl=CL}, 
        PS=#ps{sample_fb=FB, rays=RaysB, hits=HitsB}, 
        #ropt{refresh=RI}, IAs) ->
-    io:format("Starting rendering~n",[]),
-    {X,Y} = pbr_film:resolution(SceneS),
-    Start = os:timestamp(),
-    W0 = wings_cl:cast('InitFrameBuffer', [FB], X*Y, [], CL),
+    io:format("Initilizes buffers~n",[]),
+    {X,Y} = pbr_film:resolution(SceneS),    
+    wings_cl:cast('InitFrameBuffer', [FB], X*Y, [], CL),
     W1 = wings_cl:cast('Init', IAs, ?TASK_SIZE, [], CL),
     {Qn,Qt,LocalMem} = pbr_scene:intersect_data(SceneS),
     IArgs = [RaysB, HitsB, Qn, Qt, ?MAX_RAYS, LocalMem],
     wings_cl:set_args('Intersect', IArgs, CL),
-    Res = render_loop(10, 0, [W0,W1], CL, {Start, FB, RI, PS, SceneS}),
-    Stop = os:timestamp(),
-    io:format("Rendered in: ~s #rays:  ~p~n",
-	      [format_time(timer:now_diff(Stop,Start)),
-	       Res*?TASK_SIZE]),
+    erlang:garbage_collect(),
+    {ok, completed} = cl:wait(W1),
+    io:format("Starting rendering~n",[]),
+    Start = os:timestamp(),
+    Res = render_loop(10, 0, [], CL, {Start, FB, RI, PS, SceneS}),
+    Time = timer:now_diff(os:timestamp(),Start),
+    io:format("Rendered in: ~s #rays:  ~wK/secs ~n",
+	      [format_time(Time), (Res*?TASK_SIZE) div (Time div 1000)]),
     normal.
 
 render_loop(N, C, Wait, CL, Data) when N > 0 ->
@@ -120,7 +122,8 @@ render_loop(0, C0, Wait, CL, Data = {StartTime, FB, RI, _PS, SceneS0}) ->
 	    ok = cl:flush(wings_cl:get_queue(CL)),
 	    render_loop(10, Count, Wait, CL, Data)
     after 0 ->
-	    cl:wait(hd(Wait)),
+	    erlang:garbage_collect(),
+	    {ok, completed} = cl:wait(hd(Wait)),
 	    Elapsed = timer:now_diff(os:timestamp(), StartTime) div 1000,
 	    case Elapsed > RI of
 		true ->
@@ -143,6 +146,7 @@ update_film(Wait, FB, SceneS) ->
 
 init_render(_Id, Seed, Start, Opts, SceneS0) ->
     PS1 = #ps{},
+    io:format("Creating data~n",[]),
     MeshBuffs = {_, _, Materials} = pbr_scene:mesh2mat(SceneS0),
     PS2 = create_scene_buffs(PS1, MeshBuffs, SceneS0),
     PS3 = create_light_buffs(PS2, SceneS0),
@@ -150,9 +154,9 @@ init_render(_Id, Seed, Start, Opts, SceneS0) ->
     CamBin = pbr_camera:pack_camera(Opts#ropt.lens_r, SceneS0), 
     PS5 = PS4#ps{cam=wings_cl:buff(CamBin, SceneS0#renderer.cl)},
     PS  = create_work_buffs(PS5, calc_task_size(PS5, Opts), SceneS0), 
-
+    io:format("Compiling OpenCL code~n",[]),
     CompilerParams = create_params(Seed, Start, Materials, Opts, PS, SceneS0),
-    SceneS = compile(SceneS0, CompilerParams, Opts, PS),
+    SceneS = ?TC(compile(SceneS0, CompilerParams, Opts, PS)),
     SamplerArgs = sampler_args(PS, Opts, SceneS),
     AdvancePathsArgs = advance_paths_args(PS), 
     wings_cl:set_args('Sampler', SamplerArgs, SceneS#renderer.cl),
@@ -266,10 +270,11 @@ create_params(Seed, Start, Materials, Opt, PS, SceneS) ->
 
 sampler_args(PS=#ps{task=TaskB, taskstats=TaskStatsB, rays=RaysB, cam=CamB},
 	     Opts, #renderer{cl=CL}) ->
-    Args0 = stratified_sampler_size(Opts, PS) * wings_cl:get_wg_sz('Sampler',CL),
-    case Args0 of
+    case stratified_sampler_size(Opts, PS) of
 	0 -> [TaskB, TaskStatsB, RaysB, CamB];
-	_ -> [TaskB, TaskStatsB, RaysB, CamB | Args0]
+	SSSz ->
+	    Args0 = [{local, SSSz * wings_cl:get_wg_sz('Sampler',CL)}],
+	    [TaskB, TaskStatsB, RaysB, CamB | Args0]
     end.
 
 advance_paths_args(#ps{task=TaskB, rays=RaysB, hits=HitsB,
@@ -309,28 +314,39 @@ compile(RS=#renderer{cl=CL0, force_wg=ForceWg}, Params,
     io:format("Defines: ~p~n",[Params]),
     CL1 = wings_cl:compile(Fs, Params, CL0),
     Ks = ['Init', 'InitFrameBuffer', 'AdvancePaths', 'Sampler'],
-    CL = if ForceWg > 0 ->
-		 lists:foldl(fun(Kernel, State) ->
-				     wings_cl:set_wg_sz(Kernel, ForceWg, State)
-			     end, CL1, Ks);
-	    true -> 
-		 case Sampler of
-		     #sampler{type=stratified} ->
-			 SSSz  = stratified_sampler_size(Opts, PS),
-			 InitMax = wings_cl:get_lmem_sz('Init', CL1),
-			 InitSz = decrease_wg(wings_cl:get_wg_sz('Init',CL1), 
-					      SSSz, InitMax),
-			 CL2 = wings_cl:set_wg_sz('Init', InitSz, CL1),
-			 SamplerMax = wings_cl:get_lmem_sz('Sampler', CL2),
-			 SamplerSz = decrease_wg(wings_cl:get_wg_sz('Init',CL1), 
-						 SSSz, SamplerMax),
-			 wings_cl:set_wg_sz('Sampler', SamplerSz, CL1);
-		     _ -> 
-			 CL1
-		 end
-	 end,
-    io:format("Kernel          Max workgroupsize ~n",[]),
-    [io:format("~-15s ~5w~n", [atom_to_list(Kernel), 
+    CL3 = if ForceWg > 0 ->
+		  lists:foldl(fun(Kernel, State) ->
+				      wings_cl:set_wg_sz(Kernel, ForceWg, State)
+			      end, CL1, Ks);
+	     true -> 
+		  case Sampler of
+		      #sampler{type=stratified} ->
+			  SSSz  = stratified_sampler_size(Opts, PS),
+			  InitMax = wings_cl:get_lmem_sz('Init', CL1),
+			  InitSz = decrease_wg(wings_cl:get_wg_sz('Init',CL1), 
+					       SSSz, InitMax),
+			  CL2 = wings_cl:set_wg_sz('Init', InitSz, CL1),
+			  SamplerMax = wings_cl:get_lmem_sz('Sampler', CL2),
+			  SamplerSz = decrease_wg(wings_cl:get_wg_sz('Init',CL1), 
+						  SSSz, SamplerMax),
+			  wings_cl:set_wg_sz('Sampler', SamplerSz, CL1);
+		      _ -> 
+			  CL1
+		  end
+	  end,
+    %% Can not trust the wg sizes (on at least) Nvidia when TASK_SIZE > 512
+    %% I get: CL_OUT_OF_RESOURCES error waiting for idle on GeForce
+    %% Tweak them:
+    MaxWGs = [ {'Intersect', 256}, 
+	       {'AdvancePaths', 128}, 
+	       {'Sampler', 2048}],
+    CL = lists:foldl(fun({Kernel, MaxWg}, State) ->
+			     Curr = wings_cl:get_wg_sz(Kernel, State),
+			     wings_cl:set_wg_sz(Kernel, min(MaxWg, Curr), State)
+		     end, CL3, MaxWGs),
+    
+    io:format("Kernel:         WorkGroupSize: ~n",[]),
+    [io:format("~-15s ~5w~n", [atom_to_list(Kernel),
 			       wings_cl:get_wg_sz(Kernel, CL)])
      || Kernel <- ['Intersect'|Ks]],
     RS#renderer{cl=CL}.
@@ -341,11 +357,11 @@ decrease_wg(WG, Size, Max) when WG > 64 ->
 	false -> WG
     end;
 decrease_wg(WG, _, _) when WG >= 64 -> WG;
-decrease_wg(WG, _, _) -> 
-    io:format("Not enough local memory to run," 
+decrease_wg(WG, _, _) ->
+    io:format("Not enough local memory to run,"
 	      "try to reduce stratified xsamples and ysamples values"),
     io:format("Or set cl_max_workgroup_sz to ~p or lower", [WG]),
-    exit(out_of_local_mem).	    
+    exit(out_of_local_mem).
 
 param(Str, Value) when is_integer(Value) -> 
     io_lib:format(" -D ~s=~p", [Str,Value]);
