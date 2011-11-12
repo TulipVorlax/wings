@@ -810,7 +810,7 @@ void GenerateCameraRay(
 	// Compute point on plane of focus
 	const float focalDistance = camera->focalDistance;
 	const float dist = focalDistance - hither;
-	const float ft = dist / dir.z;
+	const float ft = dist / -dir.z;  // dgud modified to -Z direction as opengl
 	Point Pfocus;
 	Pfocus.x = orig.x + dir.x * ft;
 	Pfocus.y = orig.y + dir.y * ft;

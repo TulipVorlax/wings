@@ -255,8 +255,13 @@ set_args_1(Name, K, Args) ->
 enqueue_kernel(No, Wait, Q, #kernel{id=K, wg=WG0}) ->
     {GWG,WG} = calc_wg(No, WG0),
 %%    io:format("GWG ~w WG ~w~n",[GWG,WG]),
-    {ok, Event} = cl:enqueue_nd_range_kernel(Q,K,GWG,WG,Wait),
-    Event.
+    case Wait of 
+	nowait -> 
+	    ok = cl:nowait_enqueue_nd_range_kernel(Q,K,GWG,WG,[]);	    
+	    _ -> 
+	    {ok, Event} = cl:enqueue_nd_range_kernel(Q,K,GWG,WG,Wait),
+	    Event
+    end.
 
 calc_wg(No, WG) 
   when is_integer(No), is_integer(WG), No =< WG ->
